@@ -29,17 +29,9 @@
   [f c]
   (+ (* c (- f 0.5)) 0.5))
 
-;; f_ded ([F1, C1], [F2, C2], [F, C]) :-
-;;   u_and ([F1, F2], F)
-;;   u_and ([C1, C2, F], C) .
-
 (defn f-ded
   [f1 c1 f2 c2]
   [(u-and f1 f2) (u-and f1 c1 f2 c2)])
-
-;; f_abd ([F1, C1], [F2, C2], [F2, C]) :-
-;;   u_and ([F1, C1, C2], W)
-;;   u_w2c (W, C) .
 
 (defn f-abd
   [f1 c1 f2 c2]

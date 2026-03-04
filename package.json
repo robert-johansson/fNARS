@@ -1,0 +1,12 @@
+{
+  "name": "fnars",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "bun run nbb -m fNARS.core",
+    "test": "bun run nbb -m fNARS.test-runner"
+  },
+  "dependencies": {
+    "nbb": "^1.3.196"
+  }
+}

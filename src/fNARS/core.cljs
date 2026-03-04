@@ -10,4 +10,4 @@
       (do
         (println (str "Hello, " name "! " welcome-message))
         (println "Loaded configuration:" config))
-      (println "Usage: bb -m fNARS.core <name>"))))
+      (println "Usage: nbb -m fNARS.core <name>"))))

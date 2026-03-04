@@ -11,8 +11,8 @@
         e2 (t/f-exp f2 c2)]
     (if (= statement1 statement2)
       (if (>= c1 c2)
-        [statement1 [f1 c1]]    ;; choice([S, [F1, C1]], [S, [_F2, C2]], [S, [F1, C1]]) :- C1 >= C2, !
-        [statement1 [f2 c2]])   ;; choice([S, [_F1, C1]], [S, [F2, C2]], [S, [F2, C2]]) :- C1 < C2, !.
+        [statement1 [f1 c1]]
+        [statement1 [f2 c2]])
       (if (>= e1 e2)
         [statement1 [f1 c1]]
         [statement2 [f2 c2]]))))
