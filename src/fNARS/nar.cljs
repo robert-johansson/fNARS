@@ -26,11 +26,12 @@
     :config config
     :concepts {}
     :atom-index {}
+    :atom-values {}
     :time-index {:items [] :current-index 0}
     :cycling-belief-events (pq/pq-init (:cycling-belief-events-max config))
     :cycling-goal-events {}
     :operations {}
-    :rng-state 42
+    :rng-state [0 42]
     :output []}))
 
 (defn nar-add-operation
@@ -48,6 +49,13 @@
                :atom op-atom
                :action action-fn}
         args (assoc :args (vec args))))))
+
+(defn nar-register-atom-value
+  "Register a numeric value and measurement name for an atom keyword.
+   Atoms with the same measurement name can be analogically unified.
+   Matches ONA's Narsese_setAtomValue."
+  [state atom-kw value measurement-name]
+  (assoc-in state [:atom-values atom-kw] {:value value :measurement measurement-name}))
 
 (defn- add-event-to-memory
   "Add an event to the NAR's memory (cycling events and concept updates).

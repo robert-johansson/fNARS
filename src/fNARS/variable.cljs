@@ -3,6 +3,7 @@
    Variable atoms: :$1-:$9 (independent), :#1-:#9 (dependent), :?1-:?9 (query).
    Unification, substitution, variable introduction, and normalization."
   (:require [fNARS.term :as term]
+            [fNARS.truth :as truth]
             [fNARS.narsese :as narsese]))
 
 (defn independent-var?
@@ -109,6 +110,61 @@
   [general specific]
   (unify2 general specific true))
 
+(defn unify-with-analogy
+  "Unify with numeric term similarity. Matches ONA Variable.c:62-121.
+   When non-variable atoms differ but both have numeric values with the same
+   measurement name, applies Truth_Analogy to reduce confidence proportionally.
+   Returns {:success bool :substitution map :truth tv}."
+  [initial-truth general specific atom-values config]
+  (let [similarity-distance (:similarity-distance config 1.0)]
+    (loop [i 0
+           substitution {}
+           tv initial-truth]
+      (if (>= i term/compound-term-size-max)
+        {:success true :substitution substitution :truth tv}
+        (let [g-atom (get general i)]
+          (if (nil? g-atom)
+            (recur (inc i) substitution tv)
+            (if (variable? g-atom)
+              ;; Variable: bind as in normal unify
+              (let [subtree (term/extract-subterm specific i)]
+                (cond
+                  (and (query-var? g-atom) (variable? (term/term-root subtree)))
+                  {:success false :substitution {} :truth tv}
+
+                  (term/copula? (term/term-root subtree) term/SET-TERMINATOR)
+                  {:success false :substitution {} :truth tv}
+
+                  (and (contains? substitution g-atom)
+                       (not (term/term-equal (get substitution g-atom) subtree)))
+                  {:success false :substitution {} :truth tv}
+
+                  :else
+                  (recur (inc i) (assoc substitution g-atom subtree) tv)))
+              ;; Non-variable: check exact match or numeric similarity
+              (let [s-atom (get specific i)]
+                (if (= g-atom s-atom)
+                  (recur (inc i) substitution tv)
+                  ;; Atoms differ — try numeric similarity (ONA Variable.c:95-104)
+                  (let [g-info (get atom-values g-atom)
+                        s-info (get atom-values s-atom)]
+                    (if (and (:numeric-term-similarity config)
+                             (> (:confidence tv) 0.0)
+                             g-info s-info
+                             (= (:measurement g-info) (:measurement s-info)))
+                      (let [v1 (:value g-info)
+                            v2 (:value s-info)
+                            sim-conf (max 0.0 (- 1.0 (/ (js/Math.abs (- v1 v2))
+                                                         similarity-distance)))
+                            new-tv (truth/truth-analogy tv {:frequency 1.0
+                                                            :confidence sim-conf})]
+                        (if (== (:confidence new-tv) 0.0)
+                          {:success false :substitution {} :truth new-tv}
+                          (recur (inc i) substitution new-tv)))
+                      ;; Not numeric or different measurement — fail
+                      {:success false :substitution {} :truth tv})))))))))))
+
+
 (defn apply-substitute
   "Apply a substitution to a term, replacing variables with their bindings."
   [t substitution]
@@ -123,12 +179,43 @@
 
 ;; -- Variable Introduction --
 
-(defn- count-atoms-in-statements
-  "Count occurrences of simple atoms in a term (recursively through HOL structure).
-   Returns a frequency map {atom -> count}."
+(defn- count-all-simple-atoms
+  "Count all simple atoms in a term's flat vector. Used after descending into statements."
   [t]
-  (let [atoms (filter narsese/is-simple-atom? t)]
-    (frequencies atoms)))
+  (frequencies (filter narsese/is-simple-atom? t)))
+
+(defn- merge-counts [a b]
+  (merge-with + a b))
+
+(defn- count-atoms-in-statements
+  "Count occurrences of simple atoms in higher-order statement subterms.
+   Matches ONA's countHigherOrderStatementAtoms: only counts atoms that appear
+   inside inheritance/similarity statements, not bare atoms. Recurses through
+   sequences, conjunctions, implications, equivalences, and negations."
+  [t]
+  (let [root (term/term-root t)]
+    (cond
+      ;; Negation: recurse into child
+      (term/copula? root term/NEGATION)
+      (count-atoms-in-statements (term/extract-subterm t 1))
+
+      ;; Higher-order connectives: recurse into both sides
+      (or (term/copula? root term/SEQUENCE)
+          (term/copula? root term/CONJUNCTION)
+          (term/copula? root term/TEMPORAL-IMPLICATION)
+          (term/copula? root term/IMPLICATION)
+          (term/copula? root term/EQUIVALENCE))
+      (merge-counts
+        (count-atoms-in-statements (term/extract-subterm t 1))
+        (count-atoms-in-statements (term/extract-subterm t 2)))
+
+      ;; Inheritance or similarity: count all simple atoms inside
+      (or (term/copula? root term/INHERITANCE)
+          (term/copula? root term/SIMILARITY))
+      (count-all-simple-atoms t)
+
+      ;; Bare atom or other: nothing to count
+      :else {})))
 
 (defn- new-var-id
   "Find the next available variable ID (1-9) of the given type in the term."

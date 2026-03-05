@@ -45,6 +45,16 @@
    :anticipation-threshold          0.501
    :anticipation-confidence         0.01
 
+   ;; Subsumption parameters (ONA Config.h:56-58)
+   :subsumption-confidence-threshold 0.05
+   :subsumption-frequency-threshold  0.5
+
+   ;; Negative outcome parameters (ONA Config.h:60)
+   :neg-goal-age-max                 20
+
+   ;; Numeric term similarity (ONA Config.h:96-98)
+   :numeric-term-similarity          true
+
    ;; Temporal compounding
    :precondition-consequence-distance 20   ;; same as event-belief-distance
    :correlate-outcome-recency       20

@@ -123,6 +123,19 @@
              (term/copula? (get op-term 1) term/PRODUCT))
     (term/extract-subterm op-term 4)))
 
+(defn get-operation-term-from-subject
+  "Extract the full operation term from an implication's subject.
+   For (A &/ ^op) returns ^op or <({SELF}*arg) --> ^op>.
+   For bare operations, returns the operation itself.
+   Matches ONA Narsese_getOperationTerm for MAX_COMPOUND_OP_LEN=1."
+  [imp-subject]
+  (cond
+    (term/copula? (term/term-root imp-subject) term/SEQUENCE)
+    (let [right (term/extract-subterm imp-subject 2)]
+      (when (is-operation? right) right))
+    (is-operation? imp-subject) imp-subject
+    :else nil))
+
 (defn is-simple-atom?
   "Check if an atom is a simple atom (not copula, not nil, not variable prefix).
    Simple atoms are user-defined terms like :green, :left, :^pick."

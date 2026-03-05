@@ -44,6 +44,12 @@
     {:frequency f
      :confidence (* (:confidence v1) (:confidence v2) f)}))
 
+(defn truth-structural-deduction
+  "Structural deduction: deduction(v, {f=1.0, c=RELIANCE}).
+   ONA: Truth_StructuralDeduction(v1, v2) = Truth_Deduction(v1, STRUCTURAL_TRUTH)."
+  [v config]
+  (truth-deduction v {:frequency 1.0 :confidence (:reliance config)}))
+
 (defn truth-abduction
   "Abduction: f = f2, c = w2c(f1*c1*c2)"
   [v1 v2 horizon]

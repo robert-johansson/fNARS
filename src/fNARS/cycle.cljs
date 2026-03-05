@@ -35,29 +35,7 @@
                  (conj selected {:event (:item result) :priority (:priority result)})
                  (inc i)))))))
 
-(defn- select-goal-events
-  "Select goal events from the cycling goal queue (layer 0) for processing."
-  [state]
-  (let [config (:config state)
-        n (:goal-event-selections config)
-        goal-pqs (:cycling-goal-events state)]
-    (loop [pqs goal-pqs
-           selected []
-           layer 0]
-      (if (or (>= (count selected) n)
-              (>= layer (:cycling-goal-events-layers config)))
-        (assoc state
-          :cycling-goal-events pqs
-          :selected-goals selected)
-        (let [pq (get pqs layer (pq/pq-init (:cycling-goal-events-max config)))]
-          (if (zero? (pq/pq-count pq))
-            (recur pqs selected (inc layer))
-            (let [result (pq/pq-pop-max pq)]
-              (recur (assoc pqs layer (:pq result))
-                     (conj selected {:event (:item result)
-                                     :priority (:priority result)
-                                     :layer layer})
-                     layer))))))))
+;; Goal selection is now integrated into process-goal-events (layer-by-layer)
 
 ;; -- Belief Processing --
 
@@ -162,14 +140,19 @@
         ;; Gather all recent concepts from time index
         time-index (:time-index state)
         items (:items time-index [])
+        ;; Deduplicate by concept id, matching ONA's processID2 mechanism
+        ;; (the time index can contain the same term-key multiple times)
+        seen (volatile! #{})
         recent-concepts
         (for [term-key items
               :let [c (memory/find-concept state term-key)]
               :when (and c
+                         (not (contains? @seen (:id c)))
                          (not (event/event-deleted? (:belief-spike c)))
                          (let [bt (:occurrence-time (:belief-spike c))]
                            (and (<= bt post-time)
-                                (<= (- post-time bt) max-dist))))]
+                                (<= (- post-time bt) max-dist))))
+              :let [_ (vswap! seen conj (:id c))]]
           c)]
     ;; Phase 1: Search for <(precondition &/ operation) =/> postcondition> pattern
     ;; Only when postcondition is NOT an operation
@@ -255,19 +238,16 @@
       state)))
 
 (defn- maybe-anticipate
-  "Call anticipation for input operation events.
-   Matches ONA Cycle.c lines 866-878: anticipate after processing ops with priority >= 1.0."
+  "Call anticipation for input belief events with priority >= 1.0.
+   Matches ONA Cycle.c line 875-878: for every selected belief with input priority,
+   call Decision_Anticipate(op_id, op_term, false, currentTime).
+   For non-operation beliefs (ball_right etc.), op_id=0, which triggers
+   negative confirmation on temporal implications in precondition-beliefs[0]."
   [state ev priority current-time]
-  (let [term (:term ev)
-        root (term/term-root term)]
-    (if-not (and (>= priority 1.0)
-                 (or (term/is-operator? root)
-                     (narsese/is-operation? term)))
-      state
-      (let [op-id (memory/get-operation-id state term)]
-        (if (zero? op-id)
-          state
-          (decision/anticipate state op-id current-time))))))
+  (if-not (>= priority 1.0)
+    state
+    (let [op-id (memory/get-operation-id state (:term ev))]
+      (decision/anticipate state op-id current-time))))
 
 (defn- process-belief-events
   "Process selected belief events: activate concepts, mine temporal correlations."
@@ -287,84 +267,215 @@
 
 ;; -- Goal Processing --
 
-(defn- process-goal-event
-  "Process a single goal event: activate concept, suggest decision, execute."
+(defn- propagate-subgoals
+  "Propagate subgoals via implications for a goal that didn't trigger execution."
   [state goal-entry current-time]
   (let [config (:config state)
         goal (:event goal-entry)
         term (:term goal)
-        ;; Activate sensorimotor concept for goal
-        [state concept] (memory/conceptualize state term current-time)
-        state (if concept
-                (let [goal-result (inference/revision-and-choice
-                                    (:goal-spike concept) goal current-time config)]
-                  (memory/update-concept state term
+        related (memory/related-concepts state term (:unification-depth config))]
+    (reduce
+      (fn [state related-concept]
+        (reduce
+          (fn [state [op-id table]]
+            (reduce
+              (fn [state imp]
+                (let [postcondition (term/extract-subterm (:term imp) 2)
+                      unification (variable/unify postcondition term)]
+                  (if (:success unification)
+                    (let [subgoal (inference/goal-deduction goal imp current-time)
+                          subgoal-exp (truth/truth-expectation (:truth subgoal))]
+                      (if (> subgoal-exp (:decision-threshold config))
+                        (let [layer (inc (:layer goal-entry 0))
+                              goal-pqs (:cycling-goal-events state)
+                              pq-key (min layer (dec (:cycling-goal-events-layers config)))
+                              pq (get goal-pqs pq-key (pq/pq-init (:cycling-goal-events-max config)))
+                              {:keys [pq added?]} (pq/pq-push pq subgoal-exp subgoal)]
+                          (assoc-in state [:cycling-goal-events pq-key] pq))
+                        state))
+                    state)))
+              state
+              (when table (:items table))))
+          state
+          (:precondition-beliefs related-concept)))
+      state
+      related)))
+
+(defn- activate-goal-concept
+  "Activate a concept for a goal event: set goal spike, call Decision_Suggest.
+   Matches ONA's Cycle_ActivateSensorimotorConcept for goal events."
+  [state concept-term goal current-time]
+  (let [concept (memory/find-concept state concept-term)]
+    (if (nil? concept)
+      {:decision {:execute? false :desire 0} :state state}
+      (let [config (:config state)
+            state (memory/update-concept state concept-term
                     #(-> %
-                         (assoc :goal-spike (:event goal-result))
-                         (update :usage concept/usage-use current-time false)
-                         (update :priority max (:priority goal-entry 0.5)))))
-                state)
-        ;; Re-fetch concept after update
-        concept (memory/find-concept state term)]
-    (if concept
-      ;; Try to suggest a decision
-      (let [{:keys [decision state]} (decision/suggest-decision state concept goal current-time)]
-        (if (:execute? decision)
-          ;; Execute the decision
-          (decision/execute-decision state decision current-time)
-          ;; No decision from tables - try motor babbling
-          (let [babbling-chance (:motor-babbling-chance config)
-                rng (:rng-state state 42)
-                new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0x7FFFFFFF)
-                should-babble? (< (/ (double (mod new-rng 1000)) 1000.0) babbling-chance)
-                state (assoc state :rng-state new-rng)]
-            (if should-babble?
-              (let [{:keys [decision state]} (decision/motor-babble state)]
-                (if (:execute? decision)
-                  (decision/execute-decision state decision current-time)
-                  state))
-              ;; Propagate subgoals via implications
-              (let [related (memory/related-concepts state term (:unification-depth config))]
-                (reduce
-                  (fn [state related-concept]
-                    ;; Check implication tables for goal derivation
-                    (reduce
-                      (fn [state [op-id table]]
-                        (reduce
-                          (fn [state imp]
-                            (let [postcondition (term/extract-subterm (:term imp) 2)
-                                  unification (variable/unify postcondition term)]
-                              (if (:success unification)
-                                ;; Derive subgoal
-                                (let [subgoal (inference/goal-deduction goal imp current-time)
-                                      subgoal-exp (truth/truth-expectation (:truth subgoal))]
-                                  (if (> subgoal-exp (:decision-threshold config))
-                                    ;; Add subgoal to goal events queue (next layer)
-                                    (let [layer (inc (:layer goal-entry 0))
-                                          goal-pqs (:cycling-goal-events state)
-                                          pq-key (min layer (dec (:cycling-goal-events-layers config)))
-                                          pq (get goal-pqs pq-key (pq/pq-init (:cycling-goal-events-max config)))
-                                          {:keys [pq added?]} (pq/pq-push pq subgoal-exp subgoal)]
-                                      (assoc-in state [:cycling-goal-events pq-key] pq))
-                                    state))
-                                state)))
-                          state
-                          (when table (:items table))))
-                      state
-                      (:precondition-beliefs related-concept)))
-                  state
-                  related))))))
-      state)))
+                         (update :goal-spike
+                           (fn [spike]
+                             (if (or (= (:type spike) :deleted) (nil? spike)
+                                     (> (:occurrence-time goal) (:occurrence-time spike)))
+                               goal spike)))
+                         (update :usage concept/usage-use current-time false)))
+            concept (memory/find-concept state concept-term)]
+        (decision/suggest-decision state concept goal current-time)))))
+
+(defn- process-sensorimotor-goal
+  "Process a goal event against all related concepts, matching ONA's
+   Cycle_ProcessSensorimotorEvent. Conceptualizes the term, then iterates
+   related concepts calling activate-sensorimotor-concept for each.
+   Returns {:decision best-decision :state state}."
+  [state goal current-time]
+  (let [config (:config state)
+        term (:term goal)
+        [state _concept] (memory/conceptualize state term current-time)
+        related (memory/related-concepts state term (:unification-depth config))]
+    (reduce
+      (fn [{:keys [decision state] :as acc} related-concept]
+        (let [concept-term (:term related-concept)
+              subs (variable/unify concept-term term)]
+          (if (:success subs)
+            (let [{rel-decision :decision rel-state :state}
+                  (activate-goal-concept state concept-term goal current-time)]
+              (if (and (:execute? rel-decision)
+                       (>= (:desire rel-decision 0) (:desire decision 0)))
+                {:decision rel-decision :state rel-state}
+                {:decision decision :state rel-state}))
+            acc)))
+      {:decision {:execute? false :desire 0} :state state}
+      related)))
+
+(defn- find-best-concept-for-component
+  "Find the concept with strongest belief spike matching a goal component.
+   Returns {:best-c concept :best-subs substitution} or nil."
+  [state component current-time config last-occ-time]
+  (let [related (memory/related-concepts state component (:unification-depth config))
+        has-vars? (variable/has-variable? component)]
+    (loop [remaining (seq related)
+           best-c nil
+           best-subs nil
+           best-exp 0.0]
+      (if-not remaining
+        (when best-c {:best-c best-c :best-subs best-subs})
+        (let [c (first remaining)]
+          (if (variable/has-variable? (:term c))
+            (if has-vars? (recur (next remaining) best-c best-subs best-exp) ;; continue
+                          (when best-c {:best-c best-c :best-subs best-subs})) ;; done (no-var optimization)
+            (let [subs (variable/unify component (:term c))
+                  spike (:belief-spike c)
+                  exp (when (and (:success subs)
+                                 (not (event/event-deleted? spike))
+                                 (>= (:occurrence-time spike) last-occ-time))
+                        (truth/truth-expectation
+                          (truth/truth-projection (:truth spike) (:occurrence-time spike)
+                                                  current-time (:projection-decay config))))
+                  good? (and exp (> exp (:condition-threshold config)) (> exp best-exp))
+                  [bc bs be] (if good? [c (:substitution subs) exp] [best-c best-subs best-exp])]
+              (if has-vars?
+                (recur (next remaining) bc bs be)
+                ;; No variables: only check one concept (ONA goto DONE_CONCEPT_ITERATING)
+                (when bc {:best-c bc :best-subs bs})))))))))
+
+(defn- goal-sequence-decomposition
+  "Decompose sequence goals into component subgoals.
+   Matches ONA Cycle.c:158-268 (Cycle_GoalSequenceDecomposition).
+   Returns updated state if the goal was a sequence, nil otherwise."
+  [state goal priority layer]
+  (let [config (:config state)
+        current-time (:current-time state)
+        goal-term (:term goal)]
+    (when (term/copula? (term/term-root goal-term) term/SEQUENCE)
+      ;; Extract components right-to-left from left-nested sequence
+      ;; (&/ (&/ A B) C) -> [C, B, A] (index 0=rightmost, i=leftmost)
+      (let [components
+            (loop [cur goal-term, comps []]
+              (if (term/copula? (term/term-root cur) term/SEQUENCE)
+                (recur (term/extract-subterm cur 1)
+                       (conj comps (term/extract-subterm cur 2)))
+                (conj comps cur)))
+            i (dec (count components)) ;; index of deepest/leftmost
+            new-goal (inference/event-update goal current-time config)
+            ;; Loop from j=i (deepest) toward j=0 (rightmost)
+            [status j new-goal]
+            (loop [j i, new-goal new-goal, components components, last-occ -1]
+              (if (< j 0)
+                [:done -1 new-goal] ;; shouldn't happen (j==0 returns :all-fulfilled)
+                (let [match (find-best-concept-for-component
+                              state (nth components j) current-time config last-occ)]
+                  (if (nil? match)
+                    [:broke j new-goal]
+                    (if (zero? j)
+                      [:all-fulfilled 0 new-goal]
+                      ;; Apply substitution to remaining components, derive subgoal
+                      (let [{:keys [best-c best-subs]} match
+                            components (if (seq best-subs)
+                                         (reduce
+                                           (fn [comps u]
+                                             (assoc comps u (variable/apply-substitute
+                                                             (nth comps u) best-subs)))
+                                           components (range 0 j))
+                                         components)
+                            new-goal (inference/goal-sequence-deduction
+                                       new-goal (:belief-spike best-c) current-time config)
+                            new-goal (assoc new-goal :term (nth components (dec j)))]
+                        (recur (dec j) new-goal components
+                               (:occurrence-time (:belief-spike best-c)))))))))]
+        (case status
+          :all-fulfilled state ;; all components matched, nothing to derive
+          :broke
+          (let [;; If j==i (nothing matched), structural deduction on deepest
+                new-goal (if (== j i)
+                           (-> new-goal
+                               (assoc :term (nth components i))
+                               (assoc :truth (truth/truth-structural-deduction
+                                               (:truth new-goal) config)))
+                           new-goal)
+                ;; Add derived subgoal to cycling goal events
+                sub-priority (* priority (truth/truth-expectation (:truth new-goal)))
+                pq-key (min layer (dec (:cycling-goal-events-layers config)))
+                pq (get-in state [:cycling-goal-events pq-key]
+                           (pq/pq-init (:cycling-goal-events-max config)))
+                {:keys [pq]} (pq/pq-push pq sub-priority new-goal)]
+            (assoc-in state [:cycling-goal-events pq-key] pq)))))))
 
 (defn- process-goal-events
-  "Process selected goal events."
+  "Process goal events layer by layer, matching ONA's Cycle.c flow.
+   For each layer: pop goal, process against related concepts (each calling
+   Decision_Suggest), execute if found, otherwise propagate subgoals."
   [state]
-  (let [current-time (:current-time state)]
-    (reduce
-      (fn [state goal-entry]
-        (process-goal-event state goal-entry current-time))
-      state
-      (:selected-goals state))))
+  (let [config (:config state)
+        current-time (:current-time state)
+        n (:goal-event-selections config)
+        layers (:cycling-goal-events-layers config)]
+    (loop [state state
+           layer 0]
+      (if (>= layer layers)
+        state
+        (let [pq (get-in state [:cycling-goal-events layer]
+                         (pq/pq-init (:cycling-goal-events-max config)))]
+          (if (zero? (pq/pq-count pq))
+            (recur state (inc layer))
+            ;; Pop one goal from this layer
+            (let [result (pq/pq-pop-max pq)
+                  state (assoc-in state [:cycling-goal-events layer] (:pq result))
+                  goal-entry {:event (:item result)
+                              :priority (:priority result)
+                              :layer layer}
+                  goal (:event goal-entry)]
+              ;; Try sequence decomposition first (ONA Cycle.c:582-586)
+              (if-let [decomposed-state (goal-sequence-decomposition
+                                          state goal (:priority goal-entry) layer)]
+                (recur decomposed-state (inc layer))
+                ;; Not a sequence goal — proceed with normal processing
+                (let [{:keys [decision state]}
+                      (process-sensorimotor-goal state goal current-time)]
+                  (if (:execute? decision)
+                    ;; Execute, reset all cycling goal events, stop
+                    (-> (decision/execute-decision state decision current-time)
+                        (assoc :cycling-goal-events {}))
+                    ;; Propagate subgoals, continue to next layer
+                    (recur (propagate-subgoals state goal-entry current-time)
+                           (inc layer))))))))))))
 
 ;; -- Forgetting --
 
@@ -454,8 +565,7 @@
       (update :current-time inc)
       process-pending-events
       select-belief-events
-      select-goal-events
       process-belief-events
       process-goal-events
       apply-forgetting
-      (dissoc :selected-beliefs :selected-goals)))
+      (dissoc :selected-beliefs)))

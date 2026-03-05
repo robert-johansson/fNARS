@@ -144,7 +144,7 @@
            rng seed]
       (if (<= i 0)
         (vec arr)
-        (let [new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0x7FFFFFFF)
+        (let [new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0xFFFFFFFF)
               j (mod new-rng (inc i))
               tmp (aget arr i)]
           (aset arr i (aget arr j))

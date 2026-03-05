@@ -58,7 +58,9 @@
         imp-term (narsese/make-implication-term (:term a) (:term b))]
     (implication/make-implication
       {:term imp-term
-       :truth (truth/truth-induction truth-b truth-a (:horizon config))
+       :truth (truth/truth-eternalize
+                (truth/truth-induction truth-b truth-a (:horizon config))
+                (:horizon config))
        :stamp stamp
        :occurrence-time-offset (- (:occurrence-time b) (:occurrence-time a))
        :creation-time creation-time})))
