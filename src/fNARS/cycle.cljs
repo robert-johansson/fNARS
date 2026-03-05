@@ -142,18 +142,21 @@
         items (:items time-index [])
         ;; Deduplicate by concept id, matching ONA's processID2 mechanism
         ;; (the time index can contain the same term-key multiple times)
-        seen (volatile! #{})
         recent-concepts
-        (for [term-key items
-              :let [c (memory/find-concept state term-key)]
-              :when (and c
-                         (not (contains? @seen (:id c)))
+        (second
+          (reduce
+            (fn [[seen concepts] term-key]
+              (let [c (memory/find-concept state term-key)]
+                (if (and c
+                         (not (contains? seen (:id c)))
                          (not (event/event-deleted? (:belief-spike c)))
                          (let [bt (:occurrence-time (:belief-spike c))]
                            (and (<= bt post-time)
                                 (<= (- post-time bt) max-dist))))
-              :let [_ (vswap! seen conj (:id c))]]
-          c)]
+                  [(conj seen (:id c)) (conj concepts c)]
+                  [seen concepts])))
+            [#{} []]
+            items))]
     ;; Phase 1: Search for <(precondition &/ operation) =/> postcondition> pattern
     ;; Only when postcondition is NOT an operation
     (let [state
@@ -559,13 +562,15 @@
 ;; -- Main Cycle --
 
 (defn cycle-perform
-  "Perform one inference cycle. Pure function: state -> state."
+  "Perform one inference cycle. Pure function: state -> state.
+   Time increments AFTER processing, matching ONA's flow:
+   event at currentTime -> Cycle_Perform(currentTime) -> currentTime++"
   [state]
   (-> state
-      (update :current-time inc)
       process-pending-events
       select-belief-events
       process-belief-events
       process-goal-events
       apply-forgetting
-      (dissoc :selected-beliefs)))
+      (dissoc :selected-beliefs)
+      (update :current-time inc)))
