@@ -175,10 +175,24 @@
                                 [{:eternal? (= tense :eternal)
                                   :occurrence-time-offset occurrence-time-offset}])
                       :goal   (nar/nar-add-input state term event/event-type-goal truth)
-                      :question state ;; TODO: implement question handling
+                      :question state
                       state)
+              ;; Handle question answering
+              [state question-output]
+              (if (= type :question)
+                (let [{:keys [state answer]} (nar/nar-answer-question state term tense)]
+                  (if answer
+                    [state (str "Answer: " (format-term (:term answer))
+                                (if (= (:occurrence-time answer) -1)
+                                  ". "
+                                  (str ". :|: occurrenceTime=" (:occurrence-time answer) " "))
+                                "Truth: " (format-truth (:truth answer)))]
+                    [state "//No answer found."]))
+                [state nil])
               {:keys [output state]} (nar/nar-get-output state)]
           {:state state
-           :output (str/join "\n" (map format-output-entry output))})
+           :output (str/join "\n" (filter seq
+                     (concat (map format-output-entry output)
+                             (when question-output [question-output]))))})
         {:state state
          :output (str "//Failed to parse: " line)}))))

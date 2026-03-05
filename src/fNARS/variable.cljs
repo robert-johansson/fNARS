@@ -57,10 +57,11 @@
 
 ;; -- Unification --
 
-(defn unify
+(defn unify2
   "Unify a general term (may contain variables) with a specific term.
+   When query-var-only? is true, only query variables (?1-?9) can bind.
    Returns {:success true :substitution {var-atom -> subterm}} or {:success false}."
-  [general specific]
+  [general specific query-var-only?]
   (loop [i 0
          substitution {}]
     (if (>= i term/compound-term-size-max)
@@ -68,30 +69,45 @@
       (let [g-atom (get general i)]
         (if (nil? g-atom)
           (recur (inc i) substitution)
-          (if (variable? g-atom)
-            ;; Variable in general: extract corresponding subtree from specific
-            (let [subtree (term/extract-subterm specific i)]
-              (cond
-                ;; Query var can't match a variable
-                (and (query-var? g-atom) (variable? (term/term-root subtree)))
-                {:success false :substitution {}}
+          (let [is-allowed-var? (if query-var-only?
+                                  (query-var? g-atom)
+                                  (variable? g-atom))]
+            (if is-allowed-var?
+              ;; Variable in general: extract corresponding subtree from specific
+              (let [subtree (term/extract-subterm specific i)]
+                (cond
+                  ;; Query var can't match a variable
+                  (and (query-var? g-atom) (variable? (term/term-root subtree)))
+                  {:success false :substitution {}}
 
-                ;; Set terminator not allowed
-                (term/copula? (term/term-root subtree) term/SET-TERMINATOR)
-                {:success false :substitution {}}
+                  ;; Set terminator not allowed
+                  (term/copula? (term/term-root subtree) term/SET-TERMINATOR)
+                  {:success false :substitution {}}
 
-                ;; Check consistency with existing binding
-                (and (contains? substitution g-atom)
-                     (not (term/term-equal (get substitution g-atom) subtree)))
-                {:success false :substitution {}}
+                  ;; Check consistency with existing binding
+                  (and (contains? substitution g-atom)
+                       (not (term/term-equal (get substitution g-atom) subtree)))
+                  {:success false :substitution {}}
 
-                :else
-                (recur (inc i) (assoc substitution g-atom subtree))))
-            ;; Non-variable: must match exactly
-            (let [s-atom (get specific i)]
-              (if (not= g-atom s-atom)
-                {:success false :substitution {}}
-                (recur (inc i) substitution)))))))))
+                  :else
+                  (recur (inc i) (assoc substitution g-atom subtree))))
+              ;; Non-variable: must match exactly
+              (let [s-atom (get specific i)]
+                (if (not= g-atom s-atom)
+                  {:success false :substitution {}}
+                  (recur (inc i) substitution))))))))))
+
+(defn unify
+  "Unify a general term (may contain variables) with a specific term.
+   Returns {:success true :substitution {var-atom -> subterm}} or {:success false}."
+  [general specific]
+  (unify2 general specific false))
+
+(defn unify-query
+  "Unify allowing only query variables (?1-?9) to bind.
+   Used for question answering."
+  [general specific]
+  (unify2 general specific true))
 
 (defn apply-substitute
   "Apply a substitution to a term, replacing variables with their bindings."

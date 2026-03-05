@@ -254,6 +254,21 @@
             recent-concepts)]
       state)))
 
+(defn- maybe-anticipate
+  "Call anticipation for input operation events.
+   Matches ONA Cycle.c lines 866-878: anticipate after processing ops with priority >= 1.0."
+  [state ev priority current-time]
+  (let [term (:term ev)
+        root (term/term-root term)]
+    (if-not (and (>= priority 1.0)
+                 (or (term/is-operator? root)
+                     (narsese/is-operation? term)))
+      state
+      (let [op-id (memory/get-operation-id state term)]
+        (if (zero? op-id)
+          state
+          (decision/anticipate state op-id current-time))))))
+
 (defn- process-belief-events
   "Process selected belief events: activate concepts, mine temporal correlations."
   [state]
@@ -265,7 +280,8 @@
             state
             (-> state
                 (activate-sensorimotor-concept ev current-time)
-                (mine-temporal-correlations selected current-time)))))
+                (mine-temporal-correlations selected current-time)
+                (maybe-anticipate ev (:priority selected) current-time)))))
       state
       (:selected-beliefs state))))
 
