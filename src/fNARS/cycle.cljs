@@ -315,7 +315,7 @@
           ;; No decision from tables - try motor babbling
           (let [babbling-chance (:motor-babbling-chance config)
                 rng (:rng-state state 42)
-                new-rng (mod (+ (* rng 1103515245) 12345) 2147483648)
+                new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0x7FFFFFFF)
                 should-babble? (< (/ (double (mod new-rng 1000)) 1000.0) babbling-chance)
                 state (assoc state :rng-state new-rng)]
             (if should-babble?
@@ -395,15 +395,53 @@
 ;; -- Process pending events --
 
 (defn- process-pending-events
-  "Add pending events (from operation execution) to cycling events."
+  "Process pending events from operation execution.
+   Activates concepts, adds to time index, and runs anticipation.
+   Sets creation-time to current-time - 1 to simulate ONA's behavior
+   where each operation gets its own cycle via NAR_AddInputBelief.
+   Does NOT add to cycling PQ — this prevents activate-sensorimotor-concept
+   from overriding the creation-time when the event would be re-selected."
   [state]
   (let [pending (get state :pending-events [])
-        config (:config state)]
+        config (:config state)
+        current-time (:current-time state)]
     (reduce
       (fn [state ev]
-        (let [pq (:cycling-belief-events state)
-              {:keys [pq added?]} (pq/pq-push pq 1.0 ev)]
-          (assoc state :cycling-belief-events pq)))
+        (let [term (:term ev)
+              ;; Set creation-time to previous cycle so it passes creation-time filters
+              ;; when other events are mined in the same cycle
+              ev (assoc ev :creation-time (dec current-time))
+              [state concept] (memory/conceptualize state term current-time)]
+          (if-not concept
+            state
+            (let [;; Update belief spike
+                  belief-spike-result (inference/revision-and-choice
+                                       (:belief-spike concept) ev current-time config)
+                  ;; Eternalize and update eternal belief
+                  eternal-ev (event/event-eternalized ev (:horizon config))
+                  belief-result (inference/revision-and-choice
+                                  (:belief concept) eternal-ev current-time config)
+                  state (memory/update-concept state term
+                          (fn [c] (-> c
+                                      (assoc :belief-spike (:event belief-spike-result))
+                                      (assoc :belief (:event belief-result))
+                                      (update :usage concept/usage-use current-time false)
+                                      (update :priority max 1.0))))
+                  ;; Add to time index
+                  state (if (not= (:occurrence-time ev) truth/occurrence-eternal)
+                          (update state :time-index
+                            memory/time-index-add term
+                            (:occurrence-time-index-size config))
+                          state)
+                  ;; Run anticipation for operation events
+                  root (term/term-root term)
+                  state (if (or (term/is-operator? root) (narsese/is-operation? term))
+                          (let [op-id (memory/get-operation-id state term)]
+                            (if (pos? op-id)
+                              (decision/anticipate state op-id current-time)
+                              state))
+                          state)]
+              state))))
       (dissoc state :pending-events)
       pending)))
 

@@ -21,18 +21,21 @@
 (defn- has-closer-precondition-link?
   "Check if a non-variable implication on the goal concept matches the same
    concrete concept term with higher confidence. Matches ONA Decision.c:449-473.
+   Only checks real operations (op-id >= 1), not op-id 0.
    Returns true if a closer (more specific) precondition link exists."
   [goal-concept concept-term operations]
   (some
     (fn [[opk table]]
-      (some
-        (fn [impk]
-          (let [left-with-opk (term/extract-subterm (:term impk) 1)
-                left-sidek (narsese/get-precondition-without-op left-with-opk)]
-            ;; A non-variable precondition that unifies with the concept is "closer"
-            (and (not (variable/has-variable? left-sidek))
-                 (:success (variable/unify left-sidek concept-term)))))
-        (when table (:items table))))
+      ;; Only check real operations (ONA: for opk=1; opk<=OPERATIONS_MAX)
+      (when (and (number? opk) (pos? opk))
+        (some
+          (fn [impk]
+            (let [left-with-opk (term/extract-subterm (:term impk) 1)
+                  left-sidek (narsese/get-precondition-without-op left-with-opk)]
+              ;; A non-variable precondition that unifies with the concept is "closer"
+              (and (not (variable/has-variable? left-sidek))
+                   (:success (variable/unify left-sidek concept-term)))))
+          (when table (:items table)))))
     (:precondition-beliefs goal-concept)))
 
 (defn- consider-implication
@@ -123,19 +126,26 @@
     {:decision @best-decision :state state}))
 
 (defn- random-operation
-  "Select a random operation for motor babbling.
-   Uses the state's RNG."
+  "Select a random operation (with argument variant) for motor babbling.
+   For operations with :args, each arg is a separate variant."
   [state]
   (let [ops (:operations state)
-        op-entries (vec (filter (fn [[k v]] (some? (:action v))) ops))]
-    (when (seq op-entries)
+        ;; Build all (op-id, op-entry, arg-or-nil) variants
+        variants (vec (for [[op-id op-entry] ops
+                            :when (some? (:action op-entry))
+                            v (if-let [args (:args op-entry)]
+                                (map (fn [arg] [op-id op-entry arg]) args)
+                                [[op-id op-entry nil]])]
+                        v))]
+    (when (seq variants)
       (let [rng (:rng-state state 0)
             ;; Simple LCG PRNG
-            new-rng (mod (+ (* rng 1103515245) 12345) 2147483648)
-            idx (mod new-rng (count op-entries))
-            [op-id op-entry] (nth op-entries idx)]
+            new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0x7FFFFFFF)
+            idx (mod new-rng (count variants))
+            [op-id op-entry arg] (nth variants idx)]
         {:operation-id op-id
          :operation op-entry
+         :arg arg
          :rng-state new-rng}))))
 
 (defn motor-babble
@@ -148,7 +158,8 @@
                   :execute? true
                   :operation-id (:operation-id result)
                   :operation (:operation result)
-                  :babbling? true}
+                  :babbling? true
+                  :babbled-arg (:arg result)}
        :state (assoc state :rng-state (:rng-state result))}
       {:decision {:execute? false} :state state})))
 
@@ -160,8 +171,26 @@
   (let [config (:config state)
         op (:operation decision)
         op-id (:operation-id decision)
-        ;; Build operation term: ^op or <(*,{SELF},args) --> ^op>
-        op-term (term/atomic-term (:atom op))
+        ;; Determine operation term:
+        ;; 1. From implication: extract compound op from precondition sequence
+        ;; 2. From babbling with args: build compound op
+        ;; 3. Bare operator (fallback)
+        op-term (cond
+                  ;; From implication
+                  (:implication decision)
+                  (let [prec-with-op (term/extract-subterm (:term (:implication decision)) 1)]
+                    (or (when (term/copula? (term/term-root prec-with-op) term/SEQUENCE)
+                          (let [right (term/extract-subterm prec-with-op 2)]
+                            (when (narsese/is-operation? right) right)))
+                        (when (narsese/is-operation? prec-with-op) prec-with-op)
+                        (term/atomic-term (:atom op))))
+                  ;; From babbling with args
+                  (:babbled-arg decision)
+                  (narsese/make-compound-op-term (:atom op) (:babbled-arg decision))
+                  ;; Bare operator
+                  :else (term/atomic-term (:atom op)))
+        ;; Extract selected argument for output
+        selected-arg (narsese/extract-op-arg op-term)
         ;; Call the action
         action-fn (:action op)
         state (if action-fn
@@ -181,6 +210,7 @@
                 {:type :execution
                  :operation (:name op)
                  :term op-term
+                 :arguments selected-arg
                  :time current-time})]
     ;; Add the operation event to cycling beliefs
     (assoc-in state [:pending-events] (conj (get state :pending-events []) op-event))))

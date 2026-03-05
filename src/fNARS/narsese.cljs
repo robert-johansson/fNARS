@@ -106,6 +106,23 @@
   [t]
   (boolean (get-operation-atom t)))
 
+(defn make-compound-op-term
+  "Build compound operation term: <(* {SELF} arg) --> ^op>."
+  [op-atom arg-term]
+  (make-inheritance
+    (make-product
+      (make-ext-set (term/atomic-term :SELF))
+      arg-term)
+    (term/atomic-term op-atom)))
+
+(defn extract-op-arg
+  "Extract the argument term from a compound operation <(* {SELF} arg) --> ^op>.
+   Returns nil for bare operators."
+  [op-term]
+  (when (and (term/copula? (term/term-root op-term) term/INHERITANCE)
+             (term/copula? (get op-term 1) term/PRODUCT))
+    (term/extract-subterm op-term 4)))
+
 (defn is-simple-atom?
   "Check if an atom is a simple atom (not copula, not nil, not variable prefix).
    Simple atoms are user-defined terms like :green, :left, :^pick."

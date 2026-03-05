@@ -14,7 +14,7 @@
   [{:keys [frequency confidence]}]
   (str "{" (.toFixed frequency 6) " " (.toFixed confidence 6) "}"))
 
-(defn- format-term
+(defn format-term
   "Format a term for display (simplified Narsese output)."
   [t]
   (let [root (term/term-root t)]
@@ -91,8 +91,10 @@
          "Truth: " (format-truth (:truth entry)))
 
     :execution
-    (str "EXE: " (:operation entry)
-         " executed with args")
+    (let [base (str "EXE: " (:operation entry) " executed with args")]
+      (if-let [arg (:arguments entry)]
+        (str base " {" (format-term arg) "}")
+        base))
 
     :derived
     (str "Derived: " (format-term (:term entry))
@@ -162,6 +164,36 @@
       (let [val (js/parseFloat (subs line 19))]
         {:state (assoc-in state [:config :decision-threshold] val)
          :output (str "Decision threshold set to " val)})
+
+      (str/starts-with? line "*setopname ")
+      (let [parts (str/split (str/trim line) #"\s+")
+            op-idx (js/parseInt (nth parts 1))
+            op-name (nth parts 2)]
+        {:state (assoc-in state [:operations op-idx]
+                  {:name op-name
+                   :atom (keyword op-name)
+                   :action (fn [s _] s)
+                   :args []})
+         :output (str "Set operation " op-idx " to " op-name)})
+
+      (str/starts-with? line "*setoparg ")
+      (let [parts (str/split (str/trim line) #"\s+" 4)
+            op-idx (js/parseInt (nth parts 1))
+            arg-idx (js/parseInt (nth parts 2))
+            arg-str (str/trim (nth parts 3))
+            arg-term (if (str/starts-with? arg-str "(")
+                       (:term (parser/parse-narsese (str arg-str ". :|:")))
+                       (term/atomic-term (keyword arg-str)))]
+        {:state (update-in state [:operations op-idx :args]
+                  (fn [args]
+                    (let [args (or args [])
+                          needed (max (count args) arg-idx)
+                          args (vec (take needed (concat args (repeat nil))))]
+                      (assoc args (dec arg-idx) arg-term))))
+         :output (str "Set operation " op-idx " arg " arg-idx " to " arg-str)})
+
+      (str/starts-with? line "*babblingops=")
+      {:state state :output ""}
 
       (str/starts-with? line "//")
       {:state state :output ""}

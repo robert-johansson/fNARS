@@ -35,17 +35,19 @@
 
 (defn nar-add-operation
   "Register an operation with the NAR.
-   action-fn: (fn [state args] -> state) called when operation executes."
-  [state op-name action-fn]
+   action-fn: (fn [state args] -> state) called when operation executes.
+   opts: {:args [term-vec ...]} — argument variants for babbling/execution."
+  [state op-name action-fn & [{:keys [args]}]]
   (let [op-atom (keyword op-name)
         existing-id (first (keep (fn [[k v]] (when (= (:atom v) op-atom) k))
                                  (:operations state)))
         op-id (or existing-id
                   (inc (count (:operations state))))]
     (assoc-in state [:operations op-id]
-      {:name op-name
-       :atom op-atom
-       :action action-fn})))
+      (cond-> {:name op-name
+               :atom op-atom
+               :action action-fn}
+        args (assoc :args (vec args))))))
 
 (defn- add-event-to-memory
   "Add an event to the NAR's memory (cycling events and concept updates).
@@ -198,7 +200,10 @@
                                     (fn [best [op-id table]]
                                       (reduce
                                         (fn [best imp]
-                                          (if-not (:success (variable/unify-query term (:term imp)))
+                                          ;; Use unify (not unify-query) to match dependent
+                                          ;; variables (#1 etc.) in stored implications
+                                          (if-not (or (:success (variable/unify (:term imp) term))
+                                                      (:success (variable/unify-query term (:term imp))))
                                             best
                                             (let [exp (truth/truth-expectation (:truth imp))]
                                               (if (or (nil? best)
