@@ -137,19 +137,19 @@
                           (term/atomic-term (keyword event-type)))))
 
 (defn- shuffle-with-seed
-  "Deterministic shuffle using LCG."
+  "Deterministic shuffle using LCG. Pure: swaps via assoc on immutable vector."
   [coll seed]
-  (let [arr (to-array coll)]
-    (loop [i (dec (alength arr))
+  (let [v (vec coll)]
+    (loop [i (dec (count v))
+           v v
            rng seed]
       (if (<= i 0)
-        (vec arr)
+        v
         (let [new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0xFFFFFFFF)
-              j (mod new-rng (inc i))
-              tmp (aget arr i)]
-          (aset arr i (aget arr j))
-          (aset arr j tmp)
-          (recur (dec i) new-rng))))))
+              j (mod new-rng (inc i))]
+          (recur (dec i)
+                 (assoc v i (v j) j (v i))
+                 new-rng))))))
 
 (defn- pad-right [s n]
   (let [s (str s)]
