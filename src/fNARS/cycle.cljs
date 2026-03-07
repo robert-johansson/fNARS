@@ -125,120 +125,116 @@
     (or (term/is-operator? root)
         (narsese/is-operation? (:term concept)))))
 
+(defn- gather-recent-concepts
+  "Gather deduplicated recent concepts from the time index whose belief spikes
+   fall within max-dist of post-time. Matches ONA's processID2 mechanism."
+  [state post-time max-dist]
+  (let [items (get-in state [:time-index :items] [])]
+    (second
+      (reduce
+        (fn [[seen concepts] term-key]
+          (let [c (memory/find-concept state term-key)]
+            (if (and c
+                     (not (contains? seen (:id c)))
+                     (not (event/event-deleted? (:belief-spike c)))
+                     (let [bt (:occurrence-time (:belief-spike c))]
+                       (and (<= bt post-time)
+                            (<= (- post-time bt) max-dist))))
+              [(conj seen (:id c)) (conj concepts c)]
+              [seen concepts])))
+        [#{} []]
+        items))))
+
+(defn- mine-phase1-triple
+  "Try to build <(precondition &/ operation) =/> postcondition> for one
+   precondition concept given an operation concept. Returns new state."
+  [state prec-concept op-concept postcondition current-time config]
+  (let [prec-root (term/term-root (:term prec-concept))]
+    (if (or (is-op-concept? prec-concept)
+            (= (:term prec-concept) (:term op-concept))
+            (term/copula? prec-root term/IMPLICATION)
+            (term/copula? prec-root term/EQUIVALENCE)
+            (>= (:creation-time (:belief-spike prec-concept)) current-time)
+            (stamp/stamp-overlap? (:stamp (:belief-spike prec-concept))
+                                  (:stamp postcondition)))
+      state
+      (let [prec-ev (:belief-spike prec-concept)
+            op-ev (:belief-spike op-concept)]
+        (if (>= (:occurrence-time prec-ev) (:occurrence-time op-ev))
+          state
+          (let [seq-event (inference/belief-intersection prec-ev op-ev config)]
+            (if (nil? seq-event)
+              state
+              (let [seq-term (:term (narsese/make-sequence (:term prec-ev) (:term op-ev)))
+                    seq-event (assoc seq-event :term seq-term)]
+                (reinforce-link state seq-event postcondition current-time)))))))))
+
+(defn- mine-phase1
+  "Phase 1: Search for <(precondition &/ operation) =/> postcondition> triples.
+   For each operation in recent concepts, find preceding non-op preconditions."
+  [state recent-concepts postcondition current-time config]
+  (reduce
+    (fn [state op-concept]
+      (if (or (not (is-op-concept? op-concept))
+              (>= (:creation-time (:belief-spike op-concept)) current-time)
+              (stamp/stamp-overlap? (:stamp (:belief-spike op-concept)) (:stamp postcondition)))
+        state
+        (reduce
+          (fn [state prec-concept]
+            (mine-phase1-triple state prec-concept op-concept postcondition current-time config))
+          state
+          recent-concepts)))
+    state
+    recent-concepts))
+
+(defn- mine-phase2
+  "Phase 2: For same-type pairs (both non-op or both op), create
+   <A =/> B> implications and (A &/ B) sequences."
+  [state recent-concepts postcondition post-is-op? current-time config]
+  (let [post-time (:occurrence-time postcondition)]
+    (reduce
+      (fn [state prec-concept]
+        (let [prec-ev (:belief-spike prec-concept)
+              prec-root (term/term-root (:term prec-concept))
+              prec-is-op? (is-op-concept? prec-concept)
+              both-non-op? (and (not post-is-op?) (not prec-is-op?))
+              both-op? (and post-is-op? prec-is-op?)]
+          (if (or (not (or both-non-op? both-op?))
+                  (= (:occurrence-time prec-ev) post-time)
+                  (> (:creation-time prec-ev) current-time)
+                  (term/copula? prec-root term/EQUIVALENCE)
+                  (term/copula? prec-root term/IMPLICATION)
+                  (stamp/stamp-overlap? (:stamp prec-ev) (:stamp postcondition)))
+            state
+            (let [seq-event (inference/belief-intersection prec-ev postcondition config)
+                  state (if both-non-op?
+                          (reinforce-link state prec-ev postcondition current-time)
+                          state)
+                  max-len (if both-non-op?
+                            (:max-sequence-len config)
+                            (:max-compound-op-len config))
+                  state (if (and seq-event
+                                 (<= (narsese/sequence-length (:term seq-event)) max-len))
+                          (activate-sensorimotor-concept state seq-event current-time)
+                          state)]
+              state))))
+      state
+      recent-concepts)))
+
 (defn- mine-temporal-correlations
   "Mine the occurrence time index for temporal correlations.
-   Matches ONA's Cycle_ProcessBeliefEvents mining structure:
-   1. Search for operations, then preceding non-ops -> <(A &/ op) =/> B>
-   2. For same-type pairs (both non-op), create <A =/> B> and (A &/ B) sequences"
+   Matches ONA's Cycle_ProcessBeliefEvents mining structure."
   [state selected-belief current-time]
   (let [config (:config state)
         postcondition (:event selected-belief)
         post-time (:occurrence-time postcondition)
-        max-dist (:event-belief-distance config)
         post-is-op? (let [r (term/term-root (:term postcondition))]
                       (or (term/is-operator? r) (narsese/is-operation? (:term postcondition))))
-        ;; Gather all recent concepts from time index
-        time-index (:time-index state)
-        items (:items time-index [])
-        ;; Deduplicate by concept id, matching ONA's processID2 mechanism
-        ;; (the time index can contain the same term-key multiple times)
-        recent-concepts
-        (second
-          (reduce
-            (fn [[seen concepts] term-key]
-              (let [c (memory/find-concept state term-key)]
-                (if (and c
-                         (not (contains? seen (:id c)))
-                         (not (event/event-deleted? (:belief-spike c)))
-                         (let [bt (:occurrence-time (:belief-spike c))]
-                           (and (<= bt post-time)
-                                (<= (- post-time bt) max-dist))))
-                  [(conj seen (:id c)) (conj concepts c)]
-                  [seen concepts])))
-            [#{} []]
-            items))]
-    ;; Phase 1: Search for <(precondition &/ operation) =/> postcondition> pattern
-    ;; Only when postcondition is NOT an operation
-    (let [state
-          (if post-is-op?
-            state
-            (reduce
-              (fn [state op-concept]
-                (if (or (not (is-op-concept? op-concept))
-                        ;; creation-time filter: exclude same-cycle ops (ONA line 698)
-                        (>= (:creation-time (:belief-spike op-concept)) current-time)
-                        (stamp/stamp-overlap? (:stamp (:belief-spike op-concept)) (:stamp postcondition)))
-                  state
-                  ;; Found an operation preceding postcondition
-                  ;; Now search for non-op preconditions preceding the operation
-                  (let [op-ev (:belief-spike op-concept)]
-                    (reduce
-                      (fn [state prec-concept]
-                        (let [prec-root (term/term-root (:term prec-concept))]
-                          (if (or (is-op-concept? prec-concept)
-                                  (= (:term prec-concept) (:term op-concept))
-                                  ;; Exclude implications and equivalences (NOT sequences - ONA line 709)
-                                  (term/copula? prec-root term/IMPLICATION)
-                                  (term/copula? prec-root term/EQUIVALENCE)
-                                  ;; creation-time filter: exclude same-cycle preconditions (ONA line 707)
-                                  (>= (:creation-time (:belief-spike prec-concept)) current-time)
-                                  (stamp/stamp-overlap? (:stamp (:belief-spike prec-concept))
-                                                        (:stamp postcondition)))
-                          state
-                          (let [prec-ev (:belief-spike prec-concept)
-                                prec-time (:occurrence-time prec-ev)]
-                            (if (>= prec-time (:occurrence-time op-ev))
-                              state
-                              ;; Build (precondition &/ operation) sequence
-                              (let [seq-event (inference/belief-intersection prec-ev op-ev config)]
-                                (if (nil? seq-event)
-                                  state
-                                  ;; Override term to use left-nested sequence append
-                                  (let [seq-term (:term (narsese/make-sequence (:term prec-ev) (:term op-ev)))
-                                        seq-event (assoc seq-event :term seq-term)]
-                                    ;; Reinforce <(A &/ op) =/> B>
-                                    (reinforce-link state seq-event postcondition current-time)))))))))
-                      state
-                      recent-concepts))))
-              state
-              recent-concepts))
-
-          ;; Phase 2: For same-type pairs (both non-op), create implications and sequences
-          state
-          (reduce
-            (fn [state prec-concept]
-              (let [prec-ev (:belief-spike prec-concept)
-                    prec-root (term/term-root (:term prec-concept))
-                    prec-is-op? (is-op-concept? prec-concept)
-                    both-non-op? (and (not post-is-op?) (not prec-is-op?))
-                    both-op? (and post-is-op? prec-is-op?)]
-                (if (or (not (or both-non-op? both-op?))
-                        (= (:occurrence-time prec-ev) post-time)
-                        ;; creation-time filter (ONA line 736: creationTime <= currentTime)
-                        (> (:creation-time prec-ev) current-time)
-                        ;; Exclude equivalences and implications (ONA line 738)
-                        (term/copula? prec-root term/EQUIVALENCE)
-                        (term/copula? prec-root term/IMPLICATION)
-                        (stamp/stamp-overlap? (:stamp prec-ev) (:stamp postcondition)))
-                  state
-                  (let [;; Create sequence
-                        seq-event (inference/belief-intersection prec-ev postcondition config)
-                        ;; For non-op pairs: create <A =/> B> implication
-                        state (if both-non-op?
-                                (reinforce-link state prec-ev postcondition current-time)
-                                state)
-                        ;; Process sequence if length within limits (ONA lines 758-769)
-                        max-len (if both-non-op?
-                                  (:max-sequence-len config)
-                                  (:max-compound-op-len config))
-                        state (if (and seq-event
-                                       (<= (narsese/sequence-length (:term seq-event)) max-len))
-                                (activate-sensorimotor-concept state seq-event current-time)
-                                state)]
-                    state))))
-            state
-            recent-concepts)]
-      state)))
+        recent-concepts (gather-recent-concepts state post-time (:event-belief-distance config))]
+    (-> state
+        (cond-> (not post-is-op?)
+          (mine-phase1 recent-concepts postcondition current-time config))
+        (mine-phase2 recent-concepts postcondition post-is-op? current-time config))))
 
 (defn- maybe-anticipate
   "Call anticipation for input belief events with priority >= 1.0.
