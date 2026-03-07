@@ -155,15 +155,110 @@
         (when (> (truth/truth-expectation precondition-truth) condition-threshold)
           precondition-truth)))))
 
+(defn- check-subsumption
+  "Check if a specific implication is subsumed (inhibited) by an existing
+   entry on the postcondition concept's table. Returns {:existed? :inhibited?}.
+   Matches ONA Decision.c:485-503."
+  [state specific-imp op-id config]
+  (let [sub-postcondition (term/extract-subterm (:term specific-imp) 2)
+        postc (memory/find-concept state sub-postcondition)
+        postc-items (when postc
+                      (when-let [t (get-in postc [:precondition-beliefs op-id])]
+                        (:items t)))]
+    (reduce
+      (fn [acc existing-imp]
+        (if (term/term-equal (:term specific-imp) (:term existing-imp))
+          {:existed? true
+           :inhibited? (or (:inhibited? acc)
+                         (and (> (:confidence (:truth existing-imp))
+                                 (:subsumption-confidence-threshold config))
+                              (< (:frequency (:truth existing-imp))
+                                 (:subsumption-frequency-threshold config))))}
+          acc))
+      {:existed? false :inhibited? false}
+      postc-items)))
+
+(defn- update-best
+  "If decision beats current best (by desire, then complexity), return new best.
+   Otherwise return current best unchanged."
+  [best decision imp-term]
+  (if-not decision
+    best
+    (let [complexity (term/term-complexity imp-term)]
+      (if (better-decision? decision complexity (:decision best) (:complexity best))
+        {:decision decision :complexity complexity}
+        best))))
+
+(defn- score-variable-candidate
+  "Score a single concept against a variable implication.
+   Checks analogy unification, closer-precondition-link, subsumption.
+   Returns updated best or unchanged best."
+  [best state goal imp op-id op-entry concept-term concept
+   precondition-term goal-concept atom-values current-time config]
+  (if (or (variable/has-variable? concept-term)
+          (event/event-deleted? (:belief-spike concept)))
+    best
+    (let [belief-spike-truth (:truth (:belief-spike concept))
+          subs2 (variable/unify-with-analogy
+                  belief-spike-truth precondition-term concept-term
+                  atom-values config)]
+      (if-not (:success subs2)
+        best
+        (let [perfect-match? (== (:confidence (:truth subs2))
+                                 (:confidence belief-spike-truth))]
+          (if (and (not perfect-match?)
+                   (has-closer-precondition-link?
+                     goal-concept concept-term belief-spike-truth
+                     (:confidence (:truth subs2)) atom-values config))
+            best
+            (let [precondition-truth (get-precondition-belief concept current-time config)]
+              (if-not precondition-truth
+                best
+                (let [precondition-truth
+                      (if perfect-match?
+                        precondition-truth
+                        (update precondition-truth :confidence *
+                          (/ (:confidence (:truth subs2))
+                             (max 1e-10 (:confidence belief-spike-truth)))))
+                      specific-imp (-> imp
+                                       (update :term variable/apply-substitute (:substitution subs2))
+                                       (assoc :source-concept-key concept-term
+                                              :source-concept-id (:id concept)))
+                      {:keys [existed? inhibited?]} (check-subsumption state specific-imp op-id config)]
+                  (if inhibited?
+                    best
+                    (let [decision (consider-implication state goal specific-imp op-id op-entry
+                                    precondition-truth (:belief-spike concept)
+                                    current-time config)
+                          decision (when decision
+                                     (if-not existed?
+                                       (assoc decision :missing-specific-implication specific-imp)
+                                       decision))]
+                      (update-best best decision (:term specific-imp)))))))))))))
+
+(defn- score-nonvariable-candidate
+  "Score a non-variable implication via direct source-concept lookup.
+   Returns updated best or unchanged best."
+  [best state goal imp op-id op-entry current-time config]
+  (let [source-concept (memory/find-concept state (:source-concept-key imp))]
+    (if-not (and source-concept
+                 (== (:id source-concept) (:source-concept-id imp)))
+      best
+      (let [precondition-truth (get-precondition-belief source-concept current-time config)]
+        (if-not precondition-truth
+          best
+          (let [decision (consider-implication state goal imp op-id op-entry
+                           precondition-truth (:belief-spike source-concept)
+                           current-time config)]
+            (update-best best decision (:term imp))))))))
+
 (defn- decision-best-candidate
   "Find the best operation from implication tables for a given goal concept.
    For variable preconditions, scans all concepts to find matches
    (matching ONA's Decision_BestCandidate lines 441-537).
-   Pure: uses nested reduce instead of atom. Ties broken by complexity.
    Returns {:decision decision :state state}."
   [state goal-concept goal current-time]
   (let [config (:config state)
-        operations (:operations state)
         atom-values (:atom-values state)
         init-best {:decision {:desire 0.0 :execute? false}
                    :complexity term/compound-term-size-max}]
@@ -184,100 +279,23 @@
                                       (:term imp))
                            imp (assoc imp :term imp-term)
                            precondition-with-op (term/extract-subterm imp-term 1)
-                           precondition-term (narsese/get-precondition-without-op precondition-with-op)
-                           has-vars? (variable/has-variable? precondition-term)]
-                       (if has-vars?
-                         ;; Variable precondition: scan all concepts (ONA lines 441-537)
+                           precondition-term (narsese/get-precondition-without-op precondition-with-op)]
+                       (if (variable/has-variable? precondition-term)
+                         ;; Variable precondition: scan all concepts
                          (reduce
                            (fn [best [concept-term concept]]
-                             (if (or (variable/has-variable? concept-term)
-                                     (event/event-deleted? (:belief-spike concept)))
-                               best
-                               (let [belief-spike-truth (:truth (:belief-spike concept))
-                                     subs2 (variable/unify-with-analogy
-                                             belief-spike-truth precondition-term concept-term
-                                             atom-values config)]
-                                 (if-not (:success subs2)
-                                   best
-                                   (let [perfect-match? (== (:confidence (:truth subs2))
-                                                            (:confidence belief-spike-truth))]
-                                     (if (and (not perfect-match?)
-                                              (has-closer-precondition-link?
-                                                goal-concept concept-term belief-spike-truth
-                                                (:confidence (:truth subs2))
-                                                atom-values config))
-                                       best
-                                       (let [precondition-truth (get-precondition-belief concept current-time config)]
-                                         (if-not precondition-truth
-                                           best
-                                           (let [precondition-truth
-                                                 (if perfect-match?
-                                                   precondition-truth
-                                                   (update precondition-truth :confidence *
-                                                     (/ (:confidence (:truth subs2))
-                                                        (max 1e-10 (:confidence belief-spike-truth)))))
-                                                 specific-imp (-> imp
-                                                                  (update :term variable/apply-substitute (:substitution subs2))
-                                                                  (assoc :source-concept-key concept-term
-                                                                         :source-concept-id (:id concept)))
-                                                 ;; Gap 5: Subsumption inhibition (ONA Decision.c:485-503)
-                                                 sub-postcondition (term/extract-subterm (:term specific-imp) 2)
-                                                 postc (memory/find-concept state sub-postcondition)
-                                                 postc-items (when postc
-                                                               (when-let [t (get-in postc [:precondition-beliefs op-id])]
-                                                                 (:items t)))
-                                                 {:keys [existed? inhibited?]}
-                                                 (reduce
-                                                   (fn [acc existing-imp]
-                                                     (if (term/term-equal (:term specific-imp) (:term existing-imp))
-                                                       {:existed? true
-                                                        :inhibited? (or (:inhibited? acc)
-                                                                      (and (> (:confidence (:truth existing-imp))
-                                                                              (:subsumption-confidence-threshold config))
-                                                                           (< (:frequency (:truth existing-imp))
-                                                                              (:subsumption-frequency-threshold config))))}
-                                                       acc))
-                                                   {:existed? false :inhibited? false}
-                                                   postc-items)]
-                                             (if inhibited?
-                                               best
-                                               (let [decision (consider-implication state goal specific-imp op-id op-entry
-                                                                precondition-truth (:belief-spike concept)
-                                                                current-time config)]
-                                                 (if-not decision
-                                                   best
-                                                   (let [complexity (term/term-complexity (:term specific-imp))
-                                                         decision (if-not existed?
-                                                                    (assoc decision :missing-specific-implication specific-imp)
-                                                                    decision)]
-                                                     (if (better-decision? decision complexity
-                                                                          (:decision best) (:complexity best))
-                                                       {:decision decision :complexity complexity}
-                                                       best))))))))))))))
+                             (score-variable-candidate
+                               best state goal imp op-id op-entry concept-term concept
+                               precondition-term goal-concept atom-values current-time config))
                            best
                            (:concepts state))
-                         ;; Non-variable: use source-concept lookup (fast path)
-                         (let [source-concept (memory/find-concept state (:source-concept-key imp))]
-                           (if-not (and source-concept
-                                        (== (:id source-concept) (:source-concept-id imp)))
-                             best
-                             (let [precondition-truth (get-precondition-belief source-concept current-time config)]
-                               (if-not precondition-truth
-                                 best
-                                 (let [decision (consider-implication state goal imp op-id op-entry
-                                                  precondition-truth (:belief-spike source-concept)
-                                                  current-time config)]
-                                   (if-not decision
-                                     best
-                                     (let [complexity (term/term-complexity (:term imp))]
-                                       (if (better-decision? decision complexity
-                                                            (:decision best) (:complexity best))
-                                         {:decision decision :complexity complexity}
-                                         best)))))))))))))
+                         ;; Non-variable: direct source-concept lookup
+                         (score-nonvariable-candidate
+                           best state goal imp op-id op-entry current-time config))))))
                best
                items)))
          init-best
-         operations))
+         (:operations state)))
      :state state}))
 
 (defn- random-operation
