@@ -180,6 +180,78 @@
       state
       (recur (cycle/cycle-perform state) (inc i)))))
 
+(defn- best-by-expectation
+  "Return candidate if its expectation beats best, otherwise return best."
+  [best candidate]
+  (if (or (nil? best)
+          (>= (truth/truth-expectation (:truth candidate))
+              (truth/truth-expectation (or (:projected-truth best) (:truth best)))))
+    candidate
+    best))
+
+(defn- search-implications
+  "Search a concept's implication tables for a matching implication."
+  [best concept question-term]
+  (reduce
+    (fn [best [_op-id table]]
+      (reduce
+        (fn [best imp]
+          (if-not (or (:success (variable/unify (:term imp) question-term))
+                      (:success (variable/unify-query question-term (:term imp))))
+            best
+            (best-by-expectation best
+              {:term (:term imp)
+               :truth (:truth imp)
+               :occurrence-time truth/occurrence-eternal})))
+        best
+        (when table (:items table))))
+    best
+    (:precondition-beliefs concept)))
+
+(defn- search-temporal-belief
+  "Check a concept's belief spike and predicted belief for temporal questions."
+  [best concept tense current-time config]
+  (let [;; Check belief spike (present/past)
+        best (if (and (not (event/event-deleted? (:belief-spike concept)))
+                      (or (= tense :present) (= tense :past)))
+               (let [projected (truth/truth-projection
+                                 (:truth (:belief-spike concept))
+                                 (:occurrence-time (:belief-spike concept))
+                                 current-time (:projection-decay config))]
+                 (best-by-expectation best
+                   {:term (:term (:belief-spike concept))
+                    :truth (:truth (:belief-spike concept))
+                    :projected-truth projected
+                    :occurrence-time (:occurrence-time (:belief-spike concept))
+                    :concept concept}))
+               best)
+        ;; Check predicted belief (present/future)
+        best (if (and (not (event/event-deleted? (:predicted-belief concept)))
+                      (or (= tense :present) (= tense :future)))
+               (let [projected (truth/truth-projection
+                                 (:truth (:predicted-belief concept))
+                                 (:occurrence-time (:predicted-belief concept))
+                                 current-time (:projection-decay config))]
+                 (best-by-expectation best
+                   {:term (:term (:predicted-belief concept))
+                    :truth (:truth (:predicted-belief concept))
+                    :projected-truth projected
+                    :occurrence-time (:occurrence-time (:predicted-belief concept))
+                    :concept concept}))
+               best)]
+    best))
+
+(defn- search-eternal-belief
+  "Check a concept's eternal belief."
+  [best concept]
+  (if (event/event-deleted? (:belief concept))
+    best
+    (best-by-expectation best
+      {:term (:term (:belief concept))
+       :truth (:truth (:belief concept))
+       :occurrence-time truth/occurrence-eternal
+       :concept concept})))
+
 (defn nar-answer-question
   "Answer a question by scanning all concepts for matching beliefs/implications.
    Matches ONA's NAR.c question answering (lines 123-283).
@@ -188,111 +260,30 @@
   (let [config (:config state)
         current-time (:current-time state)
         is-implication? (term/copula? (term/term-root term) term/TEMPORAL-IMPLICATION)
-        ;; For implications, compare postcondition; otherwise compare full term
-        to-compare (if is-implication? (term/extract-subterm term 2) term)
-        ;; Also check non-temporal implication
         is-non-temporal-imp? (term/copula? (term/term-root term) term/IMPLICATION)
-        ;; Conceptualize the question term
+        is-any-imp? (or is-implication? is-non-temporal-imp?)
+        to-compare (if is-implication? (term/extract-subterm term 2) term)
         [state _] (memory/conceptualize state term current-time)
-        ;; Scan all concepts
         best (reduce
-               (fn [best [concept-term concept]]
-                 (let [;; Try to unify question term with concept term (query-var only)
-                       match? (variable/unify-query to-compare concept-term)]
-                   (if-not (:success match?)
-                     best
-                     (let [;; Search implication tables if question is an implication
-                           best (if (or is-implication? is-non-temporal-imp?)
-                                  ;; Search precondition_beliefs tables
-                                  (reduce
-                                    (fn [best [op-id table]]
-                                      (reduce
-                                        (fn [best imp]
-                                          ;; Use unify (not unify-query) to match dependent
-                                          ;; variables (#1 etc.) in stored implications
-                                          (if-not (or (:success (variable/unify (:term imp) term))
-                                                      (:success (variable/unify-query term (:term imp))))
-                                            best
-                                            (let [exp (truth/truth-expectation (:truth imp))]
-                                              (if (or (nil? best)
-                                                      (>= exp (truth/truth-expectation (:truth best))))
-                                                {:term (:term imp)
-                                                 :truth (:truth imp)
-                                                 :occurrence-time truth/occurrence-eternal}
-                                                best))))
-                                        best
-                                        (when table (:items table))))
-                                    best
-                                    (:precondition-beliefs concept))
-                                  best)
-                           ;; Search beliefs based on tense
-                           best (if (and (not is-implication?) (not is-non-temporal-imp?))
-                                  (cond
-                                    ;; Temporal (present/past/future)
-                                    (not= tense :eternal)
-                                    (let [;; Check belief spike (present/past)
-                                          best (if (and (not (event/event-deleted? (:belief-spike concept)))
-                                                        (or (= tense :present) (= tense :past)))
-                                                 (let [projected (truth/truth-projection
-                                                                   (:truth (:belief-spike concept))
-                                                                   (:occurrence-time (:belief-spike concept))
-                                                                   current-time
-                                                                   (:projection-decay config))
-                                                       exp (truth/truth-expectation projected)]
-                                                   (if (or (nil? best)
-                                                           (> exp (truth/truth-expectation
-                                                                    (or (:projected-truth best) (:truth best)))))
-                                                     {:term (:term (:belief-spike concept))
-                                                      :truth (:truth (:belief-spike concept))
-                                                      :projected-truth projected
-                                                      :occurrence-time (:occurrence-time (:belief-spike concept))
-                                                      :concept concept}
-                                                     best))
-                                                 best)
-                                          ;; Check predicted belief (present/future)
-                                          best (if (and (not (event/event-deleted? (:predicted-belief concept)))
-                                                        (or (= tense :present) (= tense :future)))
-                                                 (let [projected (truth/truth-projection
-                                                                   (:truth (:predicted-belief concept))
-                                                                   (:occurrence-time (:predicted-belief concept))
-                                                                   current-time
-                                                                   (:projection-decay config))
-                                                       exp (truth/truth-expectation projected)]
-                                                   (if (or (nil? best)
-                                                           (> exp (truth/truth-expectation
-                                                                    (or (:projected-truth best) (:truth best)))))
-                                                     {:term (:term (:predicted-belief concept))
-                                                      :truth (:truth (:predicted-belief concept))
-                                                      :projected-truth projected
-                                                      :occurrence-time (:occurrence-time (:predicted-belief concept))
-                                                      :concept concept}
-                                                     best))
-                                                 best)]
-                                      best)
+               (fn [best [_concept-term concept]]
+                 (if-not (:success (variable/unify-query to-compare (:term concept)))
+                   best
+                   (cond-> best
+                     is-any-imp?
+                     (search-implications concept term)
 
-                                    ;; Eternal
-                                    :else
-                                    (if (not (event/event-deleted? (:belief concept)))
-                                      (let [exp (truth/truth-expectation (:truth (:belief concept)))]
-                                        (if (or (nil? best)
-                                                (>= exp (truth/truth-expectation (:truth best))))
-                                          {:term (:term (:belief concept))
-                                           :truth (:truth (:belief concept))
-                                           :occurrence-time truth/occurrence-eternal
-                                           :concept concept}
-                                          best))
-                                      best))
-                                  best)]
-                       best))))
+                     (and (not is-any-imp?) (not= tense :eternal))
+                     (search-temporal-belief concept tense current-time config)
+
+                     (and (not is-any-imp?) (= tense :eternal))
+                     (search-eternal-belief concept))))
                nil
                (:concepts state))
-        ;; Apply question priming
         state (if-let [c (:concept best)]
-                (let [priming (:question-priming config)]
-                  (memory/update-concept state (:term c)
-                    #(-> %
-                         (update :priority max priming)
-                         (update :usage concept/usage-use current-time (= tense :eternal)))))
+                (memory/update-concept state (:term c)
+                  #(-> %
+                       (update :priority max (:question-priming config))
+                       (update :usage concept/usage-use current-time (= tense :eternal))))
                 state)]
     {:state state
      :answer (when best
