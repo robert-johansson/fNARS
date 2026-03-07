@@ -6,18 +6,22 @@ Functional ClojureScript port of the sensorimotor subset of OpenNARS for Applica
 
 ```bash
 # Run tests
-bunx --bun nbb -cp src:test -m fNARS.test-runner
+bunx --bun nbb -cp src:lib/instaparse/src:test -m fNARS.test-runner
 
 # Run Chapter 6 operant conditioning tests
-bunx --bun nbb -cp src:test test/fNARS/ch6_test.cljs
+bunx --bun nbb -cp src:lib/instaparse/src:test test/fNARS/ch6_test.cljs
 
 # Run interactive shell
-bunx --bun nbb -cp src -m fNARS.core
+bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.core
 ```
 
 ## Runtime
 
 nbb on bun. No JVM. All commands use `bunx --bun nbb`.
+
+### Dependencies
+
+- `lib/instaparse/` — [instaparse](https://github.com/robert-johansson/instaparse/tree/bb-nbb-support) (nbb-compatible fork, git submodule)
 
 ## Architecture
 
@@ -109,13 +113,17 @@ src/fNARS/
   decision.cljs       # Decision making, motor babbling
   cycle.cljs          # Main inference cycle (Phase 1 & 2 mining)
   nar.cljs            # Top-level NAR API
-  parser.cljs         # Narsese parser
+  parser.cljs         # Narsese parser (instaparse grammar)
   shell.cljs          # Interactive shell (commands, formatting)
   core.cljs           # REPL entry point
 
 test/fNARS/
-  nar_test.cljs       # 49 unit tests (105 assertions)
+  nar_test.cljs       # Unit tests
+  snapshot_test.cljs  # Snapshot tests
   ch6_test.cljs       # Chapter 6 operant conditioning tests (4 tests)
+  ch7_test.cljs       # Chapter 7 identity matching test
+
+lib/instaparse/       # instaparse git submodule (bb-nbb-support branch)
 
 tools/ona-mcp/
   index.js            # MCP server for C ONA binary
