@@ -453,17 +453,86 @@
             state))
         state))))
 
+(defn- find-precondition-concept
+  "Find and validate the precondition concept for an implication.
+   Returns the concept or nil."
+  [state imp]
+  (when-let [prec (when (:source-concept-key imp)
+                    (memory/find-concept state (:source-concept-key imp)))]
+    (when (== (:id prec) (:source-concept-id imp))
+      prec)))
+
+(defn- store-predicted-belief
+  "Derive and store a predicted belief on the postcondition concept.
+   Returns new state."
+  [state imp prec-concept prec-event subs-event current-time config]
+  (let [result-event (when (and (:success subs-event)
+                                (not (event/event-deleted? prec-event)))
+                       (inference/belief-deduction prec-event imp))]
+    (if-not (and result-event
+                 (some? (term/term-root (:term result-event)))
+                 (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION))
+      [state result-event]
+      (let [result-term (:term result-event)
+            subs-ev (variable/unify (:term prec-concept) (:term prec-event))
+            result-term (cond-> result-term
+                          (:success subs-ev) (variable/apply-substitute (:substitution subs-ev))
+                          (:success subs-event) (variable/apply-substitute (:substitution subs-event)))
+            result-event (assoc result-event :term result-term)
+            [state c-event] (memory/conceptualize state result-term current-time)]
+        (if c-event
+          [(memory/update-concept state result-term
+             (fn [c]
+               (let [result (inference/revision-and-choice
+                              (:predicted-belief c) result-event current-time config)]
+                 (assoc c :predicted-belief (:event result)))))
+           result-event]
+          [state result-event])))))
+
+(defn- should-negatively-confirm?
+  "Check if an implication should receive negative confirmation."
+  [imp subs-event prec-event result-event anticipation-threshold]
+  (and (:success subs-event)
+       (not (event/event-deleted? prec-event))
+       (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION)
+       (or (> (truth/truth-expectation
+                (:truth (or result-event {:truth {:frequency 0 :confidence 0}})))
+              anticipation-threshold)
+           (and (< (:confidence (:truth imp)) 0.01)
+                (== (:frequency (:truth imp)) 0.0)))))
+
+(defn- anticipate-implication
+  "Process one implication for anticipation. Returns new state."
+  [state imp op-id postcondition-term current-time config]
+  (let [prec-concept (find-precondition-concept state imp)]
+    (if-not prec-concept
+      state
+      (let [prec-event (:belief-spike prec-concept)
+            prec-eternal (:belief prec-concept)]
+        (if (and (event/event-deleted? prec-event)
+                 (event/event-deleted? prec-eternal))
+          state
+          (let [imp-precon-with-op (term/extract-subterm (:term imp) 1)
+                imp-precon (narsese/get-precondition-without-op imp-precon-with-op)
+                subs-event (variable/unify imp-precon (:term prec-event))
+                subs-eternal (variable/unify imp-precon (:term prec-eternal))]
+            (if-not (or (:success subs-event) (:success subs-eternal))
+              state
+              (let [[state result-event]
+                    (store-predicted-belief state imp prec-concept prec-event
+                                           subs-event current-time config)]
+                (if (should-negatively-confirm? imp subs-event prec-event result-event
+                                               (:anticipation-threshold config))
+                  (add-negative-confirmation state imp op-id postcondition-term
+                                            prec-event current-time)
+                  state)))))))))
+
 (defn anticipate
   "After executing an operation, predict postconditions and add negative evidence.
    Matches ONA's Decision_Anticipate (Decision.c:556-812).
-   For each concept with implications for this operation:
-     Find the precondition concept, check if it has a live belief spike,
-     derive predicted event, store as predicted_belief,
-     and add negative confirmation for temporal implications.
    Returns new state."
   [state op-id current-time]
-  (let [config (:config state)
-        anticipation-threshold (:anticipation-threshold config)]
+  (let [config (:config state)]
     (reduce
       (fn [state [postcondition-term postc]]
         (let [table (get-in postc [:precondition-beliefs op-id])]
@@ -471,68 +540,7 @@
             state
             (reduce
               (fn [state imp]
-                (let [;; Extract precondition from implication
-                      imp-precon-with-op (term/extract-subterm (:term imp) 1)
-                      imp-precon (narsese/get-precondition-without-op imp-precon-with-op)
-                      ;; Find precondition concept via source-concept (non-declarative path)
-                      prec-concept (when (:source-concept-key imp)
-                                     (memory/find-concept state (:source-concept-key imp)))
-                      ;; Validate source concept ID
-                      prec-concept (when (and prec-concept
-                                              (== (:id prec-concept) (:source-concept-id imp)))
-                                     prec-concept)]
-                  (if-not prec-concept
-                    state
-                    (let [prec-event (:belief-spike prec-concept)
-                          prec-eternal (:belief prec-concept)]
-                      (if (and (event/event-deleted? prec-event)
-                               (event/event-deleted? prec-eternal))
-                        state
-                        ;; Check if precondition unifies
-                        (let [subs-event (variable/unify imp-precon (:term prec-event))
-                              subs-eternal (variable/unify imp-precon (:term prec-eternal))]
-                          (if-not (or (:success subs-event) (:success subs-eternal))
-                            state
-                            (let [;; Derive predicted event via belief deduction
-                                  result-event (when (and (:success subs-event)
-                                                          (not (event/event-deleted? prec-event)))
-                                                 (inference/belief-deduction prec-event imp))
-                                  ;; Store as predicted_belief on postcondition concept
-                                  state (if (and result-event
-                                                 (some? (term/term-root (:term result-event)))
-                                                 (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION))
-                                          (let [result-term (:term result-event)
-                                                ;; Apply substitutions
-                                                subs-ev (variable/unify (:term prec-concept) (:term prec-event))
-                                                result-term (if (:success subs-ev)
-                                                              (variable/apply-substitute result-term (:substitution subs-ev))
-                                                              result-term)
-                                                result-term (if (:success subs-event)
-                                                              (variable/apply-substitute result-term (:substitution subs-event))
-                                                              result-term)
-                                                result-event (assoc result-event :term result-term)
-                                                [state c-event] (memory/conceptualize state result-term current-time)]
-                                            (if c-event
-                                              (memory/update-concept state result-term
-                                                (fn [c]
-                                                  (let [result (inference/revision-and-choice
-                                                                 (:predicted-belief c) result-event current-time config)]
-                                                    (assoc c :predicted-belief (:event result)))))
-                                              state))
-                                          state)
-                                  ;; Add negative confirmation for temporal implications
-                                  state (if (and (:success subs-event)
-                                                 (not (event/event-deleted? prec-event))
-                                                 (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION)
-                                                 (or (> (truth/truth-expectation
-                                                          (:truth (or result-event {:truth {:frequency 0 :confidence 0}})))
-                                                        anticipation-threshold)
-                                                     (and (< (:confidence (:truth imp)) 0.01)
-                                                          (== (:frequency (:truth imp)) 0.0))))
-                                          (add-negative-confirmation state imp op-id postcondition-term
-                                                                     prec-event current-time)
-                                          state)]
-                              state))))))))
+                (anticipate-implication state imp op-id postcondition-term current-time config))
               state
               (:items table)))))
       state
