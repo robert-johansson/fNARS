@@ -132,14 +132,23 @@
 
 ;; -- Main runner --
 
-(defn run-nal-file [filepath & [{:keys [tolerance verbose nal-level perf?]
+(defn run-nal-file [filepath & [{:keys [tolerance verbose nal-level perf?
+                                        decl-implication-budget
+                                        decl-candidate-budget
+                                        decl-unification-budget]
                                   :or {tolerance 0.05 verbose false nal-level 6 perf? false}}]]
   (let [content (p/slurp-file filepath)
         lines (str/split-lines content)
-        config (assoc nar-config/default-config
-                 :semantic-inference-nal-level nal-level
-                 :motor-babbling-chance 0.0
-                 :perf-instrumentation perf?)]
+        config (cond-> (assoc nar-config/default-config
+                         :semantic-inference-nal-level nal-level
+                         :motor-babbling-chance 0.0
+                         :perf-instrumentation perf?)
+                 (some? decl-implication-budget)
+                 (assoc :declarative-implication-budget-per-cycle decl-implication-budget)
+                 (some? decl-candidate-budget)
+                 (assoc :declarative-candidate-budget-per-cycle decl-candidate-budget)
+                 (some? decl-unification-budget)
+                 (assoc :declarative-unification-budget-per-cycle decl-unification-budget))]
     (println (str "=== Running: " filepath " ===\n"))
     (loop [state (nar/nar-init config)
            remaining lines
@@ -208,17 +217,29 @@
 
 (defn -main [& args]
   (if (empty? args)
-    (println "Usage: bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.nal-runner <file.nal> [--verbose] [--perf] [--nal-level 6] [--tolerance 0.05]")
+    (println "Usage: bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.nal-runner <file.nal> [--verbose] [--perf] [--nal-level 6] [--tolerance 0.05] [--decl-candidate-budget N] [--decl-unification-budget N] [--decl-implication-budget N]")
     (let [filepath (first args)
           verbose (some #(= % "--verbose") args)
           perf? (some #(= % "--perf") args)
           level-idx (some (fn [i] (when (= (nth args i) "--nal-level") (inc i)))
                           (range (count args)))
           nal-level (if level-idx (p/parse-int (nth args level-idx)) 6)
+          impl-idx (some (fn [i] (when (= (nth args i) "--decl-implication-budget") (inc i)))
+                         (range (count args)))
+          decl-implication-budget (when impl-idx (p/parse-int (nth args impl-idx)))
+          cand-idx (some (fn [i] (when (= (nth args i) "--decl-candidate-budget") (inc i)))
+                         (range (count args)))
+          decl-candidate-budget (when cand-idx (p/parse-int (nth args cand-idx)))
+          uni-idx (some (fn [i] (when (= (nth args i) "--decl-unification-budget") (inc i)))
+                        (range (count args)))
+          decl-unification-budget (when uni-idx (p/parse-int (nth args uni-idx)))
           tol-idx (some (fn [i] (when (= (nth args i) "--tolerance") (inc i)))
                         (range (count args)))
           tolerance (if tol-idx (p/parse-float (nth args tol-idx)) 0.05)]
       (run-nal-file filepath {:verbose verbose
                               :perf? perf?
                               :nal-level nal-level
+                              :decl-implication-budget decl-implication-budget
+                              :decl-candidate-budget decl-candidate-budget
+                              :decl-unification-budget decl-unification-budget
                               :tolerance tolerance}))))

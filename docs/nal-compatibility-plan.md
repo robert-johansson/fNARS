@@ -105,6 +105,20 @@ Progress:
 - Started step 3 (first pass):
   - declarative precondition matching now uses indexed related-concept candidates
     when the implication precondition contains concrete atoms, with full-scan fallback.
+- Continued step 3 (second pass):
+  - added per-cycle declarative work budgets
+    (`implication/candidate/unification`).
+  - exposed runner flags for tuning:
+    `--decl-implication-budget`, `--decl-candidate-budget`,
+    `--decl-unification-budget`.
+
+Measured impact:
+
+- `threelegdog.nal` went from timing out at `90s` to completing in `18.65s`
+  under current defaults.
+- correctness status is unchanged for this file (`4/5` checks; missing
+  `<(animal * 2) --> has_leg>` answer), so remaining gap is semantic, not
+  timeout-driven.
 
 ## Strategy
 

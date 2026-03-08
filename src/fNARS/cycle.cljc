@@ -52,6 +52,26 @@
           (update-in [:perf :phase-times-ns phase-key] (fnil + 0) dt)
           (update-in [:perf :phase-counts phase-key] (fnil inc 0))))))
 
+(defn- budget-value
+  [state key]
+  (get-in state [:cycle-budget key]))
+
+(defn- budget-exhausted?
+  [state key]
+  (let [v (budget-value state key)]
+    (and (number? v) (<= v 0))))
+
+(defn- budget-consume
+  [state key n]
+  (let [v (budget-value state key)]
+    (if (number? v)
+      (update-in state [:cycle-budget key] (fn [x] (max 0 (- (or x 0) n))))
+      state)))
+
+(defn- budget-enabled?
+  [state key]
+  (number? (budget-value state key)))
+
 (defn- has-concrete-atom?
   "True when term contains at least one non-variable, non-copula atom."
   [t]
@@ -1114,31 +1134,46 @@
                             (seq related))
                      related
                      (vals (:concepts state)))]
-    (reduce
-      (fn [state concept]
-        (let [state (perf-inc state :decl-precondition-concepts-scanned)]
-        ;; Skip concepts with variables (ONA Decision.c:612-615)
+    (loop [state state
+           remaining (seq candidates)]
+      (if (or (nil? remaining)
+              (budget-exhausted? state :decl-candidates-left)
+              (budget-exhausted? state :decl-unifications-left))
+        state
+        (let [concept (first remaining)
+              state (-> state
+                        (budget-consume :decl-candidates-left 1)
+                        (perf-inc :decl-precondition-concepts-scanned))]
+          ;; Skip concepts with variables (ONA Decision.c:612-615)
           (if (variable/has-variable? (:term concept))
-            state
+            (recur state (next remaining))
             (let [prec-eternal (:belief concept)
                   prec-event (:belief-spike concept)
                   ;; BELIEF_LAST_USED_TOLERANCE check (ONA Decision.c:620)
                   skip? (and (< (:creation-time prec-eternal 0) (- current-time belief-last-used-tolerance))
                              (< (:creation-time prec-event 0) (- current-time belief-last-used-tolerance)))]
               (if skip?
-                state
+                (recur state (next remaining))
                 (let [attempts (+ (if (event/event-deleted? prec-eternal) 0 1)
                                   (if (event/event-deleted? prec-event) 0 1))
-                      state (perf-add state :decl-unification-attempts attempts)
-                      subs-eternal (when-not (event/event-deleted? prec-eternal)
+                      attempts (if (and (budget-enabled? state :decl-unifications-left)
+                                        (> attempts (budget-value state :decl-unifications-left)))
+                                 (budget-value state :decl-unifications-left)
+                                 attempts)
+                      state (-> state
+                                (budget-consume :decl-unifications-left attempts)
+                                (perf-add :decl-unification-attempts attempts))
+                      subs-eternal (when (and (pos? attempts)
+                                              (not (event/event-deleted? prec-eternal)))
                                      (variable/unify imp-precon (:term prec-eternal)))
-                      subs-event (when-not (event/event-deleted? prec-event)
+                      subs-event (when (and (> attempts (if (event/event-deleted? prec-eternal) 0 1))
+                                            (not (event/event-deleted? prec-event)))
                                    (variable/unify imp-precon (:term prec-event)))
                       successes (+ (if (:success subs-eternal) 1 0)
                                    (if (:success subs-event) 1 0))
                       state (perf-add state :decl-unification-successes successes)]
                   (if-not (or (:success subs-eternal) (:success subs-event))
-                    state
+                    (recur state (next remaining))
                     (let [;; Derive conclusions
                           result-eternal (when (and (:success subs-eternal)
                                                      (not (event/event-deleted? prec-eternal)))
@@ -1165,9 +1200,7 @@
                                     state result-event sub-prec-event subs-event
                                     current-time config)
                                   state)]
-                      state))))))))
-      state
-      candidates)))
+                      (recur state (next remaining)))))))))))))
 
 (defn- declarative-anticipate
   "Process declarative implications each cycle.
@@ -1196,12 +1229,18 @@
                           state (-> state
                                     (perf-inc :decl-implications-scanned)
                                     (cond-> is-decl? (perf-inc :decl-implications-declarative)))]
-                      (if (and is-decl? (>= decl-count top-k-declarative-implications))
+                      (if (or (and is-decl? (>= decl-count top-k-declarative-implications))
+                              (budget-exhausted? state :decl-implications-left))
                         (recur (next remaining)
-                               (perf-inc state :decl-implications-skipped-topk)
+                               (-> state
+                                   (cond-> (and is-decl? (>= decl-count top-k-declarative-implications))
+                                     (perf-inc :decl-implications-skipped-topk))
+                                   (cond-> (budget-exhausted? state :decl-implications-left)
+                                     (perf-inc :decl-implications-skipped-budget)))
                                decl-count)
                         (recur (next remaining)
                                (-> state
+                                   (budget-consume :decl-implications-left 1)
                                    (perf-inc :decl-implications-processed)
                                    (process-declarative-implication imp current-time config))
                                (if is-decl? (inc decl-count) decl-count)))))))))
@@ -1227,7 +1266,11 @@
    Time increments AFTER processing, matching ONA's flow:
    event at currentTime -> Cycle_Perform(currentTime) -> currentTime++"
   [state]
-  (let [state (timed-phase state :process-pending-events process-pending-events)
+  (let [state (assoc state :cycle-budget
+                {:decl-implications-left (get-in state [:config :declarative-implication-budget-per-cycle])
+                 :decl-candidates-left (get-in state [:config :declarative-candidate-budget-per-cycle])
+                 :decl-unifications-left (get-in state [:config :declarative-unification-budget-per-cycle])})
+        state (timed-phase state :process-pending-events process-pending-events)
         state (timed-phase state :select-belief-events select-belief-events)
         state (timed-phase state :process-belief-events process-belief-events)
         state (timed-phase state :declarative-anticipate declarative-anticipate)
@@ -1235,4 +1278,5 @@
         state (timed-phase state :apply-forgetting apply-forgetting)]
     (-> state
         (dissoc :selected-beliefs)
+        (dissoc :cycle-budget)
         (update :current-time inc))))
