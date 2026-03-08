@@ -1,143 +1,164 @@
 (ns fNARS.term
-  "Term representation using flat vectors matching ONA's binary heap encoding.
-   Atoms are keywords instead of unsigned chars.
-   Root at index 0, left child at 2i+1, right child at 2i+2.")
+  "Term representation using vectors of integer atom IDs.
+   Binary heap encoding: root at index 0, left child at 2i+1, right child at 2i+2.
+   Atoms are integer IDs managed by atom-registry. 0 = empty slot."
+  (:require [fNARS.atom-registry :as ar]))
 
 (def ^:const compound-term-size-max 64)
 
-;; Copula keywords - use valid ClojureScript keyword syntax
-(def inheritance :cop-inheritance)
-(def similarity :cop-similarity)
-(def implication :cop-implication)
-(def temporal-implication :cop-temporal-implication)
-(def equivalence :cop-equivalence)
-(def conjunction :cop-conjunction)
-(def sequence* :cop-sequence)
-(def negation :cop-negation)
-(def product :cop-product)
-(def ext-set :cop-ext-set)
-(def int-set :cop-int-set)
-(def set-terminator :cop-set-terminator)
-(def disjunction :cop-disjunction)
-(def ext-image1 :cop-ext-image1)
-(def ext-image2 :cop-ext-image2)
-(def int-image1 :cop-int-image1)
-(def int-image2 :cop-int-image2)
-(def set-element :cop-set-element)
-(def has-continuous-property :cop-has-continuous-property)
-(def ext-difference :cop-ext-difference)
-(def int-difference :cop-int-difference)
-(def ext-intersection :cop-ext-intersection)
-(def int-intersection :cop-int-intersection)
+;; -- Copula Constants (integer IDs) --
+(def inheritance ar/id-inheritance)
+(def similarity ar/id-similarity)
+(def implication ar/id-implication)
+(def temporal-implication ar/id-temporal-implication)
+(def equivalence ar/id-equivalence)
+(def conjunction ar/id-conjunction)
+(def sequence* ar/id-sequence)
+(def negation ar/id-negation)
+(def product ar/id-product)
+(def ext-set ar/id-ext-set)
+(def int-set ar/id-int-set)
+(def set-terminator ar/id-set-terminator)
+(def disjunction ar/id-disjunction)
+(def ext-image1 ar/id-ext-image1)
+(def ext-image2 ar/id-ext-image2)
+(def int-image1 ar/id-int-image1)
+(def int-image2 ar/id-int-image2)
+(def set-element ar/id-set-element)
+(def has-continuous-property ar/id-has-continuous-property)
+(def ext-difference ar/id-ext-difference)
+(def int-difference ar/id-int-difference)
+(def ext-intersection ar/id-ext-intersection)
+(def int-intersection ar/id-int-intersection)
 
-(def copula-set
-  "Set of all copula keywords."
-  #{inheritance similarity implication temporal-implication equivalence
-    conjunction sequence* negation product ext-set int-set set-terminator
-    set-element disjunction ext-image1 ext-image2 int-image1 int-image2
-    has-continuous-property ext-difference int-difference
-    ext-intersection int-intersection})
-
-(defn is-copula?
-  "Check if an atom is any copula."
-  [atom]
-  (contains? copula-set atom))
+;; -- Core Term Functions --
 
 (def empty-term
-  "An empty term (all nil slots)."
-  (vec (repeat compound-term-size-max nil)))
-
-(defn make-term
-  "Create a term from a sparse map of {index -> atom}.
-   Fills remaining slots with nil up to compound-term-size-max."
-  [atoms-map]
-  (reduce-kv
-    (fn [t idx atom] (assoc t idx atom))
-    empty-term
-    atoms-map))
+  "An empty term (all zero slots)."
+  (vec (repeat compound-term-size-max 0)))
 
 (defn atomic-term
-  "Create an atomic term (just root atom, rest nil)."
-  [atom]
-  (assoc empty-term 0 atom))
+  "Create an atomic term. Accepts a keyword (auto-interned) or integer ID."
+  [atom-or-kw]
+  (let [id (if (keyword? atom-or-kw)
+             (ar/intern-atom atom-or-kw)
+             (int atom-or-kw))]
+    (assoc empty-term 0 id)))
 
 (defn term-root
-  "Get the root atom of a term."
+  "Get the root atom ID of a term."
   [term]
   (get term 0))
 
+(defn term-get
+  "Get the atom ID at position i in a term."
+  [term i]
+  (get term (int i)))
+
+(defn term-assoc
+  "Create a new term with atom ID v at position i."
+  [term i v]
+  (assoc term (int i) (int v)))
+
 (defn left-child-idx [i] (+ (* 2 i) 1))
 (defn right-child-idx [i] (+ (* 2 i) 2))
-
-(defn- override-subterm-recursive
-  "Recursively copy subterm rooted at j into term at position i.
-   Matches C's Term_RelativeOverride."
-  [term i subterm j]
-  (if (or (>= i compound-term-size-max) (>= j compound-term-size-max))
-    term
-    (let [term (assoc term i (get subterm j))
-          left-sub (left-child-idx j)
-          right-sub (right-child-idx j)
-          left-dst (left-child-idx i)
-          right-dst (right-child-idx i)
-          term (if (and (< left-sub compound-term-size-max)
-                        (some? (get subterm left-sub)))
-                 (override-subterm-recursive term left-dst subterm left-sub)
-                 term)
-          term (if (and (< right-sub compound-term-size-max)
-                        (some? (get subterm right-sub)))
-                 (override-subterm-recursive term right-dst subterm right-sub)
-                 term)]
-      term)))
 
 (defn override-subterm
   "Override the subtree at position i in term with subterm (rooted at 0).
    Returns new term."
   [term i subterm]
-  (override-subterm-recursive term i subterm 0))
+  (letfn [(copy [t dst src]
+            (if (or (>= dst compound-term-size-max) (>= src compound-term-size-max))
+              t
+              (let [v (get subterm src)]
+                (if (zero? v)
+                  (assoc t dst 0)
+                  (let [t (assoc t dst v)
+                        left-src (left-child-idx src)
+                        right-src (right-child-idx src)
+                        left-dst (left-child-idx dst)
+                        right-dst (right-child-idx dst)
+                        t (if (and (< left-src compound-term-size-max)
+                                   (pos? (get subterm left-src)))
+                            (copy t left-dst left-src)
+                            t)
+                        t (if (and (< right-src compound-term-size-max)
+                                   (pos? (get subterm right-src)))
+                            (copy t right-dst right-src)
+                            t)]
+                    t)))))]
+    (copy term i 0)))
 
 (defn extract-subterm
-  "Extract subtree at position j from term, re-rooting it at 0.
-   Matches C's Term_ExtractSubterm."
+  "Extract subtree at position j from term, re-rooting it at 0."
   [term j]
-  (override-subterm-recursive empty-term 0 term j))
+  (override-subterm empty-term 0
+    ;; Create a "view" that maps 0->j, etc.
+    ;; Actually we can just use override-subterm with swapped args
+    term j))
+
+;; Override extract-subterm to properly re-root
+(defn extract-subterm
+  "Extract subtree at position j from term, re-rooting it at 0."
+  [term j]
+  (letfn [(copy [t dst src]
+            (if (or (>= dst compound-term-size-max) (>= src compound-term-size-max))
+              t
+              (let [v (get term src)]
+                (if (zero? v)
+                  t
+                  (let [t (assoc t dst v)
+                        left-src (left-child-idx src)
+                        right-src (right-child-idx src)
+                        left-dst (left-child-idx dst)
+                        right-dst (right-child-idx dst)
+                        t (if (and (< left-src compound-term-size-max)
+                                   (pos? (get term left-src)))
+                            (copy t left-dst left-src)
+                            t)
+                        t (if (and (< right-src compound-term-size-max)
+                                   (pos? (get term right-src)))
+                            (copy t right-dst right-src)
+                            t)]
+                    t)))))]
+    (copy empty-term 0 j)))
 
 (defn term-complexity
-  "Count non-nil atoms in the term."
+  "Count non-zero atoms in the term."
   [term]
-  (count (filter some? term)))
+  (reduce (fn [c v] (if (pos? v) (inc c) c)) 0 term))
 
-(def term-equal
+(defn term-equal
   "Check if two terms are equal."
-  =)
+  [a b]
+  (= a b))
 
 (defn has-atom
-  "Check if term contains a specific atom anywhere."
-  [term atom]
-  (some #(= % atom) term))
+  "Check if term contains a specific atom ID anywhere."
+  [term atom-id]
+  (let [id (if (keyword? atom-id) (ar/intern-atom atom-id) (int atom-id))]
+    (some #(== % id) term)))
 
 (defn term-atoms
-  "Get all non-nil atoms in a term."
+  "Get all non-zero atom IDs in a term."
   [term]
-  (filter some? term))
+  (filterv pos? term))
+
+(def copula-set
+  "Set of all copula integer IDs."
+  (set (range ar/copula-min (inc ar/copula-max))))
+
+(defn is-copula?
+  "Check if an atom ID is any copula."
+  [atom-id]
+  (ar/copula-id? atom-id))
 
 (defn simple-atom?
-  "Check if an atom is a 'simple' atom (not a copula, not nil, not a variable).
-   Simple atoms are user-defined keywords like :cat, :green, :SELF."
-  [atom]
-  (and (keyword? atom)
-       (not (is-copula? atom))
-       (let [n (name atom)
-             c (when (pos? (count n)) (first n))]
-         (and c
-              (not= c \$)
-              (not= c \#)
-              (not= c \?)))))
+  "Check if an atom ID is a 'simple' atom (not copula, not zero, not variable)."
+  [atom-id]
+  (ar/simple-atom-id? atom-id))
 
 (defn is-operator?
-  "Check if an atom is an operator (starts with ^)."
-  [atom]
-  (and (keyword? atom)
-       (let [n (name atom)]
-         (and (> (count n) 1)
-              (= (first n) \^)))))
+  "Check if an atom ID is an operator (e.g. ^pick)."
+  [atom-id]
+  (ar/operator-id? atom-id))

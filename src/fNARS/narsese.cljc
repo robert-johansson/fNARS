@@ -1,13 +1,12 @@
 (ns fNARS.narsese
-  "Narsese term construction and inspection utilities.
-   Port of Narsese.c utility functions (NOT the parser - that's in parser.cljs)."
-  (:require [fNARS.term :as term]))
+  "Narsese term construction and inspection utilities."
+  (:require [fNARS.term :as term]
+            [fNARS.atom-registry :as ar]))
 
 (defn make-sequence
   "Create a sequence term (&/ a b). Returns {:term t :success? bool}."
   [a b]
-  (let [base (term/atomic-term term/sequence*)
-        t (-> base
+  (let [t (-> (term/atomic-term term/sequence*)
               (term/override-subterm 1 a)
               (term/override-subterm 2 b))]
     {:term t :success? true}))
@@ -38,54 +37,50 @@
   [a]
   (-> (term/atomic-term term/ext-set)
       (term/override-subterm 1 a)
-      (assoc 2 term/set-terminator)))
+      (term/term-assoc 2 term/set-terminator)))
 
 (defn is-operation?
   "Check if term is an operation: ^op or <(*,{SELF},x) --> ^op>."
   [t]
-  (or (term/is-operator? (term/term-root t))
-      (and (= (term/term-root t) term/inheritance)
-           (= (get t 1) term/product)
-           (term/is-operator? (get t 2))
-           (= (get t 3) term/ext-set))))
+  (let [root (term/term-root t)]
+    (or (term/is-operator? root)
+        (and (== root term/inheritance)
+             (== (term/term-get t 1) term/product)
+             (term/is-operator? (term/term-get t 2))
+             (== (term/term-get t 3) term/ext-set)))))
 
 (defn is-executable-operation?
   "Check if term is an executable operation (has SELF or variable in agent slot)."
   [t]
   (and (is-operation? t)
-       (or (term/is-operator? (term/term-root t))
-           (= (get t 7) :SELF)
-           (and (keyword? (get t 7))
-                (let [n (name (get t 7))]
-                  (and (pos? (count n))
-                       (contains? #{\$ \# \?} (first n))))))))
+       (let [root (term/term-root t)]
+         (or (term/is-operator? root)
+             (let [slot7 (term/term-get t 7)]
+               (or (== slot7 (ar/intern-atom :SELF))
+                   (ar/variable-id? slot7)))))))
 
 (defn get-operation-atom
-  "Extract the ^op atom from any operation form.
-   Handles sequences: (a &/ ^op) -> ^op."
+  "Extract the ^op atom ID from any operation form."
   [t]
-  (cond
-    ;; Sequence: check right child
-    (= (term/term-root t) term/sequence*)
-    (let [right (term/extract-subterm t 2)]
-      (when-not (= (term/term-root right) term/sequence*)
-        (get-operation-atom right)))
+  (let [root (term/term-root t)]
+    (cond
+      (== root term/sequence*)
+      (let [right (term/extract-subterm t 2)]
+        (when-not (== (term/term-root right) term/sequence*)
+          (get-operation-atom right)))
 
-    ;; Atomic operator
-    (term/is-operator? (term/term-root t))
-    (term/term-root t)
+      (term/is-operator? root)
+      root
 
-    ;; Full operation <(* ...) --> ^op>
-    (is-operation? t)
-    (get t 2)
+      (is-operation? t)
+      (term/term-get t 2)
 
-    :else nil))
+      :else nil)))
 
 (defn get-precondition-without-op
-  "Remove operation from sequence tail.
-   (&/ precondition ^op) -> precondition (recursively)."
+  "Remove operation from sequence tail."
   [precondition]
-  (if (= (term/term-root precondition) term/sequence*)
+  (if (== (term/term-root precondition) term/sequence*)
     (let [right (term/extract-subterm precondition 2)]
       (if (is-operation? right)
         (let [left (term/extract-subterm precondition 1)]
@@ -96,7 +91,7 @@
 (defn sequence-length
   "Count the number of components in a sequence term."
   [t]
-  (if (= (term/term-root t) term/sequence*)
+  (if (== (term/term-root t) term/sequence*)
     (+ (sequence-length (term/extract-subterm t 1))
        (sequence-length (term/extract-subterm t 2)))
     1))
@@ -108,31 +103,26 @@
 
 (defn make-compound-op-term
   "Build compound operation term: <(* {SELF} arg) --> ^op>."
-  [op-atom arg-term]
+  [op-atom-id arg-term]
   (make-inheritance
     (make-product
       (make-ext-set (term/atomic-term :SELF))
       arg-term)
-    (term/atomic-term op-atom)))
+    (term/atomic-term op-atom-id)))
 
 (defn extract-op-arg
-  "Extract the argument term from a compound operation <(* {SELF} arg) --> ^op>.
-   Returns nil for bare operators."
+  "Extract the argument term from a compound operation."
   [op-term]
-  (when (and (= (term/term-root op-term) term/inheritance)
-             (= (get op-term 1) term/product))
+  (when (and (== (term/term-root op-term) term/inheritance)
+             (== (term/term-get op-term 1) term/product))
     (term/extract-subterm op-term 4)))
 
 (defn get-operation-term-from-subject
-  "Extract the full operation term from an implication's subject.
-   For (A &/ ^op) returns ^op or <({SELF}*arg) --> ^op>.
-   For bare operations, returns the operation itself.
-   Matches ONA Narsese_getOperationTerm for MAX_COMPOUND_OP_LEN=1."
+  "Extract the full operation term from an implication's subject."
   [imp-subject]
   (cond
-    (= (term/term-root imp-subject) term/sequence*)
+    (== (term/term-root imp-subject) term/sequence*)
     (let [right (term/extract-subterm imp-subject 2)]
       (when (is-operation? right) right))
     (is-operation? imp-subject) imp-subject
     :else nil))
-

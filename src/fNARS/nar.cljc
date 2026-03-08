@@ -16,7 +16,8 @@
             [fNARS.cycle :as cycle]
             [fNARS.implication :as implication]
             [fNARS.nar-config :as nar-config]
-            [fNARS.rule-table :as rule-table]))
+            [fNARS.rule-table :as rule-table]
+            [fNARS.atom-registry :as ar]))
 
 (defn nar-add-operation
   "Register an operation with the NAR.
@@ -76,58 +77,75 @@
   "If term is a temporal implication with an operation in the precondition,
    auto-register that operation (matching ONA's implicit op registration)."
   [state term]
-  (if-not (= (term/term-root term) term/temporal-implication)
+  (if-not (== (term/term-root term) term/temporal-implication)
     state
     (let [precondition (term/extract-subterm term 1)]
-      (if-not (= (term/term-root precondition) term/sequence*)
+      (if-not (== (term/term-root precondition) term/sequence*)
         state
         (let [op-term (term/extract-subterm precondition 2)]
           (if-not (narsese/is-operation? op-term)
             state
-            (let [op-atom (if (= (term/term-root op-term) term/inheritance)
-                            (get op-term 2)  ;; compound op: <(SELF * x) --> ^op>
-                            (term/term-root op-term))  ;; bare ^op
-                  already? (some (fn [[_ v]] (= (:atom v) op-atom)) (:operations state))]
+            (let [op-atom-id (if (== (term/term-root op-term) term/inheritance)
+                              (term/term-get op-term 2)  ;; compound op: <(SELF * x) --> ^op>
+                              (term/term-root op-term))  ;; bare ^op
+                  op-kw (ar/resolve-atom op-atom-id)
+                  already? (some (fn [[_ v]] (= (:atom v) op-kw)) (:operations state))]
               (if already?
                 state
-                (nar-add-operation state (name op-atom) (fn [s _] s))))))))))
+                (nar-add-operation state (name op-kw) (fn [s _] s))))))))))
 
 (defn- store-eternal-implication
-  "Store an eternal temporal implication directly in the postcondition concept's
-   precondition-beliefs table. Matches how ONA treats eternal input implications."
+  "Store an eternal implication directly in the appropriate concept table.
+   ==> implications go to implication-links on postcondition concept.
+   =/> implications go to precondition-beliefs[op-id] on postcondition concept.
+   Matches ONA Memory_ProcessNewBeliefEvent (Memory.c:284-337)."
   [state term tv]
-  (if-not (= (term/term-root term) term/temporal-implication)
-    state
-    (let [config (:config state)
-          current-time (:current-time state)
-          postcondition (term/extract-subterm term 2)
-          precondition (term/extract-subterm term 1)
-          [state post-concept] (memory/conceptualize state postcondition current-time)]
-      (if-not post-concept
-        state
-        (let [op-id (if (= (term/term-root precondition) term/sequence*)
-                      (let [op-term (term/extract-subterm precondition 2)]
-                        (if (narsese/is-operation? op-term)
-                          (memory/get-operation-id state op-term)
-                          0))
-                      0)
-              source-term (narsese/get-precondition-without-op precondition)
-              [state source-concept] (memory/conceptualize state source-term current-time)
-              imp (implication/make-implication
-                    {:term term
-                     :truth tv
-                     :stamp [(:stamp-counter state)]
-                     :occurrence-time-offset 0.0
-                     :source-concept-key (when source-concept (:term source-concept))
-                     :source-concept-id (when source-concept (:id source-concept))
-                     :creation-time current-time})
-              existing-table (get-in post-concept [:precondition-beliefs op-id]
-                                     (table/table-init))
-              {:keys [table]} (table/table-add-and-revise
-                                existing-table imp
-                                #(inference/implication-revision %1 %2 config))]
-          (memory/update-concept state postcondition
-            #(assoc-in % [:precondition-beliefs op-id] table)))))))
+  (let [root (term/term-root term)
+        is-declarative? (== root term/implication)
+        is-temporal? (== root term/temporal-implication)]
+    (if-not (or is-declarative? is-temporal?)
+      state
+      (let [config (:config state)
+            current-time (:current-time state)
+            postcondition (term/extract-subterm term 2)
+            precondition (term/extract-subterm term 1)
+            [state post-concept] (memory/conceptualize state postcondition current-time)]
+        (if-not post-concept
+          state
+          (let [op-id (if (and is-temporal? (== (term/term-root precondition) term/sequence*))
+                        (let [op-term (term/extract-subterm precondition 2)]
+                          (if (narsese/is-operation? op-term)
+                            (memory/get-operation-id state op-term)
+                            0))
+                        0)
+                source-term (if (and is-temporal? (pos? op-id))
+                              (narsese/get-precondition-without-op precondition)
+                              precondition)
+                [state source-concept] (memory/conceptualize state source-term current-time)
+                imp (implication/make-implication
+                      {:term term
+                       :truth tv
+                       :stamp [(:stamp-counter state)]
+                       :occurrence-time-offset 0.0
+                       :source-concept-key (when source-concept (:term source-concept))
+                       :source-concept-id (when source-concept (:id source-concept))
+                       :creation-time current-time})]
+            (if is-declarative?
+              ;; ==> goes to implication-links
+              (let [existing-table (:implication-links post-concept (table/table-init))
+                    {:keys [table]} (table/table-add-and-revise
+                                      existing-table imp
+                                      #(inference/implication-revision %1 %2 config))]
+                (memory/update-concept state postcondition
+                  #(assoc % :implication-links table)))
+              ;; =/> goes to precondition-beliefs[op-id]
+              (let [existing-table (get-in post-concept [:precondition-beliefs op-id]
+                                           (table/table-init))
+                    {:keys [table]} (table/table-add-and-revise
+                                      existing-table imp
+                                      #(inference/implication-revision %1 %2 config))]
+                (memory/update-concept state postcondition
+                  #(assoc-in % [:precondition-beliefs op-id] table))))))))))
 
 (defn- enqueue-event
   "Add event to the appropriate cycling priority queue."
@@ -224,7 +242,7 @@
              (assoc ev :occurrence-time truth/occurrence-eternal)
              ev)
         state (assoc state :stamp-counter new-counter)
-        ;; Store eternal temporal implications directly in precondition-beliefs
+        ;; Store eternal implications in tables (==> to implication-links, =/> to precondition-beliefs)
         state (if (and eternal? (= type event/event-type-belief))
                 (store-eternal-implication state term tv)
                 state)
@@ -262,23 +280,38 @@
     best))
 
 (defn- search-implications
-  "Search a concept's implication tables for a matching implication."
+  "Search a concept's implication tables for a matching implication.
+   Searches both precondition-beliefs and implication-links."
   [best concept question-term]
-  (reduce
-    (fn [best [_op-id table]]
-      (reduce
-        (fn [best imp]
-          (if-not (or (:success (variable/unify (:term imp) question-term))
-                      (:success (variable/unify-query question-term (:term imp))))
-            best
-            (best-by-expectation best
-              {:term (:term imp)
-               :truth (:truth imp)
-               :occurrence-time truth/occurrence-eternal})))
-        best
-        (when table (:items table))))
-    best
-    (:precondition-beliefs concept)))
+  (let [;; Search precondition-beliefs tables
+        best (reduce
+               (fn [best [_op-id table]]
+                 (reduce
+                   (fn [best imp]
+                     (if-not (or (:success (variable/unify (:term imp) question-term))
+                                 (:success (variable/unify-query question-term (:term imp))))
+                       best
+                       (best-by-expectation best
+                         {:term (:term imp)
+                          :truth (:truth imp)
+                          :occurrence-time truth/occurrence-eternal})))
+                   best
+                   (when table (:items table))))
+               best
+               (:precondition-beliefs concept))
+        ;; Search implication-links table
+        best (reduce
+               (fn [best imp]
+                 (if-not (or (:success (variable/unify (:term imp) question-term))
+                             (:success (variable/unify-query question-term (:term imp))))
+                   best
+                   (best-by-expectation best
+                     {:term (:term imp)
+                      :truth (:truth imp)
+                      :occurrence-time truth/occurrence-eternal})))
+               best
+               (when-let [t (:implication-links concept)] (:items t)))]
+    best))
 
 (defn- search-temporal-belief
   "Check a concept's belief spike and predicted belief for temporal questions."
@@ -331,8 +364,8 @@
   [state term tense]
   (let [config (:config state)
         current-time (:current-time state)
-        is-implication? (= (term/term-root term) term/temporal-implication)
-        is-non-temporal-imp? (= (term/term-root term) term/implication)
+        is-implication? (== (term/term-root term) term/temporal-implication)
+        is-non-temporal-imp? (== (term/term-root term) term/implication)
         is-any-imp? (or is-implication? is-non-temporal-imp?)
         to-compare (if is-implication? (term/extract-subterm term 2) term)
         [state _] (memory/conceptualize state term current-time)

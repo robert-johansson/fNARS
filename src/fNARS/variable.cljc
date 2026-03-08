@@ -1,111 +1,103 @@
 (ns fNARS.variable
   "Variable handling matching ONA's Variable.c.
-   Variable atoms: :$1-:$9 (independent), :#1-:#9 (dependent), :?1-:?9 (query).
+   Variable atoms: $1-$9 (independent), #1-#9 (dependent), ?1-?9 (query).
    Unification, substitution, variable introduction, and normalization."
   (:require [fNARS.term :as term]
             [fNARS.truth :as truth]
+            [fNARS.atom-registry :as ar]
             [fNARS.platform :as p]))
 
-(defn- digit-1-9?
-  "Check if character is a digit 1-9."
-  [c]
-  #?(:clj  (and (>= (int c) (int \1))
-                (<= (int c) (int \9)))
-     :cljs (let [code (.charCodeAt (str c) 0)]
-             (and (>= code 49) (<= code 57)))))
+;; Note: p is still required for p/abs in unify-with-analogy
 
 (defn independent-var?
-  "Check if atom is an independent variable ($1-$9)."
-  [atom]
-  (and (keyword? atom)
-       (let [n (name atom)]
-         (and (== (count n) 2)
-              (= (first n) \$)
-              (digit-1-9? (second n))))))
+  "Check if atom ID is an independent variable ($1-$9)."
+  [atom-id]
+  (ar/indep-var-id? atom-id))
 
 (defn dependent-var?
-  "Check if atom is a dependent variable (#1-#9)."
-  [atom]
-  (and (keyword? atom)
-       (let [n (name atom)]
-         (and (== (count n) 2)
-              (= (first n) \#)
-              (digit-1-9? (second n))))))
+  "Check if atom ID is a dependent variable (#1-#9)."
+  [atom-id]
+  (ar/dep-var-id? atom-id))
 
 (defn query-var?
-  "Check if atom is a query variable (?1-?9)."
-  [atom]
-  (and (keyword? atom)
-       (let [n (name atom)]
-         (and (== (count n) 2)
-              (= (first n) \?)
-              (digit-1-9? (second n))))))
+  "Check if atom ID is a query variable (?1-?9)."
+  [atom-id]
+  (ar/query-var-id? atom-id))
 
 (defn variable?
-  "Check if atom is any kind of variable."
-  [atom]
-  (or (independent-var? atom) (dependent-var? atom) (query-var? atom)))
+  "Check if atom ID is any kind of variable."
+  [atom-id]
+  (ar/variable-id? atom-id))
 
 (defn has-variable?
   "Check if term contains any variables of the specified types."
   ([t] (has-variable? t true true true))
   ([t independent? dependent? query?]
-   (some (fn [atom]
-           (or (and independent? (independent-var? atom))
-               (and dependent? (dependent-var? atom))
-               (and query? (query-var? atom))))
-         t)))
+   (loop [i 0]
+     (if (>= i term/compound-term-size-max)
+       false
+       (let [id (get t i)]
+         (if (or (and independent? (independent-var? id))
+                 (and dependent? (dependent-var? id))
+                 (and query? (query-var? id)))
+           true
+           (recur (inc i))))))))
 
 (defn make-var
   "Create a variable keyword. type is \\$ \\# or \\?, id is 1-9."
   [type id]
   (keyword (str type id)))
 
+(defn make-var-id
+  "Create a variable integer ID. type is \\$ \\# or \\?, num is 1-9."
+  [type num]
+  (ar/make-var-id type num))
+
 ;; -- Unification --
 
 (defn unify2
   "Unify a general term (may contain variables) with a specific term.
    When query-var-only? is true, only query variables (?1-?9) can bind.
-   Returns {:success true :substitution {var-atom -> subterm}} or {:success false}."
+   Returns {:success true :substitution {var-id -> subterm}} or {:success false}."
   [general specific query-var-only?]
   (loop [i 0
          substitution {}]
     (if (>= i term/compound-term-size-max)
       {:success true :substitution substitution}
-      (let [g-atom (get general i)]
-        (if (nil? g-atom)
+      (let [g-id (get general i)]
+        (if (zero? g-id)
           (recur (inc i) substitution)
-          (let [is-allowed-var? (if query-var-only?
-                                  (query-var? g-atom)
-                                  (variable? g-atom))]
-            (if is-allowed-var?
-              ;; Variable in general: extract corresponding subtree from specific
-              (let [subtree (term/extract-subterm specific i)]
-                (cond
-                  ;; Query var can't match a variable
-                  (and (query-var? g-atom) (variable? (term/term-root subtree)))
-                  {:success false :substitution {}}
+            (let [is-allowed-var? (if query-var-only?
+                                    (query-var? g-id)
+                                    (variable? g-id))]
+              (if is-allowed-var?
+                ;; Variable in general: extract corresponding subtree from specific
+                (let [subtree (term/extract-subterm specific i)]
+                  (cond
+                    ;; Query var can't match a variable
+                    (and (query-var? g-id) (variable? (term/term-root subtree)))
+                    {:success false :substitution {}}
 
-                  ;; Set terminator not allowed
-                  (= (term/term-root subtree) term/set-terminator)
-                  {:success false :substitution {}}
+                    ;; Set terminator not allowed
+                    (== (term/term-root subtree) term/set-terminator)
+                    {:success false :substitution {}}
 
-                  ;; Check consistency with existing binding
-                  (and (contains? substitution g-atom)
-                       (not (term/term-equal (get substitution g-atom) subtree)))
-                  {:success false :substitution {}}
+                    ;; Check consistency with existing binding
+                    (and (contains? substitution g-id)
+                         (not (term/term-equal (get substitution g-id) subtree)))
+                    {:success false :substitution {}}
 
-                  :else
-                  (recur (inc i) (assoc substitution g-atom subtree))))
-              ;; Non-variable: must match exactly
-              (let [s-atom (get specific i)]
-                (if (not= g-atom s-atom)
-                  {:success false :substitution {}}
-                  (recur (inc i) substitution))))))))))
+                    :else
+                    (recur (inc i) (assoc substitution g-id subtree))))
+                ;; Non-variable: must match exactly
+                (let [s-id (term/term-get specific i)]
+                  (if (not= g-id s-id)
+                    {:success false :substitution {}}
+                    (recur (inc i) substitution))))))))))
 
 (defn unify
   "Unify a general term (may contain variables) with a specific term.
-   Returns {:success true :substitution {var-atom -> subterm}} or {:success false}."
+   Returns {:success true :substitution {var-id -> subterm}} or {:success false}."
   [general specific]
   (unify2 general specific false))
 
@@ -117,8 +109,6 @@
 
 (defn unify-with-analogy
   "Unify with numeric term similarity. Matches ONA Variable.c:62-121.
-   When non-variable atoms differ but both have numeric values with the same
-   measurement name, applies Truth_Analogy to reduce confidence proportionally.
    Returns {:success bool :substitution map :truth tv}."
   [initial-truth general specific atom-values config]
   (let [similarity-distance (:similarity-distance config 1.0)]
@@ -127,32 +117,34 @@
            tv initial-truth]
       (if (>= i term/compound-term-size-max)
         {:success true :substitution substitution :truth tv}
-        (let [g-atom (get general i)]
-          (if (nil? g-atom)
+        (let [g-id (get general i)]
+          (if (zero? g-id)
             (recur (inc i) substitution tv)
-            (if (variable? g-atom)
+            (if (variable? g-id)
               ;; Variable: bind as in normal unify
               (let [subtree (term/extract-subterm specific i)]
                 (cond
-                  (and (query-var? g-atom) (variable? (term/term-root subtree)))
+                  (and (query-var? g-id) (variable? (term/term-root subtree)))
                   {:success false :substitution {} :truth tv}
 
-                  (= (term/term-root subtree) term/set-terminator)
+                  (== (term/term-root subtree) term/set-terminator)
                   {:success false :substitution {} :truth tv}
 
-                  (and (contains? substitution g-atom)
-                       (not (term/term-equal (get substitution g-atom) subtree)))
+                  (and (contains? substitution g-id)
+                       (not (term/term-equal (get substitution g-id) subtree)))
                   {:success false :substitution {} :truth tv}
 
                   :else
-                  (recur (inc i) (assoc substitution g-atom subtree) tv)))
+                  (recur (inc i) (assoc substitution g-id subtree) tv)))
               ;; Non-variable: check exact match or numeric similarity
-              (let [s-atom (get specific i)]
-                (if (= g-atom s-atom)
+              (let [s-id (term/term-get specific i)]
+                (if (== g-id s-id)
                   (recur (inc i) substitution tv)
-                  ;; Atoms differ — try numeric similarity (ONA Variable.c:95-104)
-                  (let [g-info (get atom-values g-atom)
-                        s-info (get atom-values s-atom)]
+                  ;; Atoms differ — try numeric similarity
+                  (let [g-kw (ar/resolve-atom g-id)
+                        s-kw (ar/resolve-atom s-id)
+                        g-info (get atom-values g-kw)
+                        s-info (get atom-values s-kw)]
                     (if (and (:numeric-term-similarity config)
                              (> (:confidence tv) 0.0)
                              g-info s-info
@@ -171,15 +163,16 @@
 
 
 (defn apply-substitute
-  "Apply a substitution to a term, replacing variables with their bindings."
+  "Apply a substitution to a term, replacing variables with their bindings.
+   Substitution maps integer var IDs to IntTerms."
   [t substitution]
   (if (empty? substitution)
     t
     (reduce
       (fn [current-term i]
-        (let [atom (get current-term i)]
-          (if (and (variable? atom) (contains? substitution atom))
-            (term/override-subterm current-term i (get substitution atom))
+        (let [atom-id (term/term-get current-term i)]
+          (if (and (variable? atom-id) (contains? substitution atom-id))
+            (term/override-subterm current-term i (get substitution atom-id))
             current-term)))
       t
       (range term/compound-term-size-max))))
@@ -187,41 +180,41 @@
 ;; -- Variable Introduction --
 
 (defn- count-all-simple-atoms
-  "Count all simple atoms in a term's flat vector. Used after descending into statements."
+  "Count all simple atoms in a term's flat array."
   [t]
-  (frequencies (filter term/simple-atom? t)))
+  (loop [i 0 freqs {}]
+    (if (>= i term/compound-term-size-max)
+      freqs
+      (let [id (get t i)]
+        (recur (inc i)
+               (if (term/simple-atom? id)
+                 (update freqs id (fnil inc 0))
+                 freqs))))))
 
 (defn- merge-counts [a b]
   (merge-with + a b))
 
 (defn- count-atoms-in-statements
-  "Count occurrences of simple atoms in higher-order statement subterms.
-   Matches ONA's countHigherOrderStatementAtoms: only counts atoms that appear
-   inside inheritance/similarity statements, not bare atoms. Recurses through
-   sequences, conjunctions, implications, equivalences, and negations."
+  "Count occurrences of simple atoms in higher-order statement subterms."
   [t]
   (let [root (term/term-root t)]
     (cond
-      ;; Negation: recurse into child
-      (= root term/negation)
+      (== root term/negation)
       (count-atoms-in-statements (term/extract-subterm t 1))
 
-      ;; Higher-order connectives: recurse into both sides
-      (or (= root term/sequence*)
-          (= root term/conjunction)
-          (= root term/temporal-implication)
-          (= root term/implication)
-          (= root term/equivalence))
+      (or (== root term/sequence*)
+          (== root term/conjunction)
+          (== root term/temporal-implication)
+          (== root term/implication)
+          (== root term/equivalence))
       (merge-counts
         (count-atoms-in-statements (term/extract-subterm t 1))
         (count-atoms-in-statements (term/extract-subterm t 2)))
 
-      ;; Inheritance or similarity: count all simple atoms inside
-      (or (= root term/inheritance)
-          (= root term/similarity))
+      (or (== root term/inheritance)
+          (== root term/similarity))
       (count-all-simple-atoms t)
 
-      ;; Bare atom or other: nothing to count
       :else {})))
 
 (defn- new-var-id
@@ -229,15 +222,12 @@
   [t var-type]
   (first
     (for [id (range 1 10)
-          :let [v (make-var var-type id)]
-          :when (not (term/has-atom t v))]
+          :let [vid (make-var-id var-type id)]
+          :when (not (term/has-atom t vid))]
       id)))
 
 (defn introduce-implication-variables
-  "Introduce variables in an implication term.
-   Atoms in BOTH sides -> independent variable ($i).
-   Atoms in ONE side with count >= 2 -> dependent variable (#i).
-   Returns {:term new-term :success? bool}."
+  "Introduce variables in an implication term."
   [imp-term]
   (let [left (term/extract-subterm imp-term 1)
         right (term/extract-subterm imp-term 2)
@@ -245,24 +235,24 @@
         right-counts (count-atoms-in-statements right)]
     (if-let [dep-start (new-var-id imp-term \#)]
       (if-let [indep-start (new-var-id imp-term \$)]
-        ;; Iterate over all atoms, introduce variables
         (let [original imp-term]
           (loop [i 0
                  result imp-term
-                 var-map {}        ;; atom -> variable keyword
+                 var-map {}
                  dep-id dep-start
                  indep-id indep-start]
             (if (>= i term/compound-term-size-max)
               {:term result :success? true}
-              (let [atom (get original i)]
-                (if (and (some? atom) (term/simple-atom? atom))
-                  (let [in-left (get left-counts atom)
-                        in-right (get right-counts atom)
+              (let [atom-id (get original i)]
+                (if (and (pos? atom-id) (term/simple-atom? atom-id))
+                  (let [self-id (ar/intern-atom :SELF)
+                        in-left (get left-counts atom-id)
+                        in-right (get right-counts atom-id)
                         needs-var? (or (and in-left (>= in-left 2))
                                        (and in-right (>= in-right 2))
                                        (and in-left in-right))]
                     (if needs-var?
-                      (if-let [existing-var (get var-map atom)]
+                      (if-let [existing-var (get var-map atom-id)]
                         ;; Already assigned a variable
                         (recur (inc i)
                                (term/override-subterm result i (term/atomic-term existing-var))
@@ -271,22 +261,20 @@
                         (if (and in-left in-right)
                           ;; Independent: appears on both sides
                           (if (<= indep-id 9)
-                            (let [v (make-var \$ indep-id)]
+                            (let [vid (make-var-id \$ indep-id)]
                               (recur (inc i)
-                                     (term/override-subterm result i (term/atomic-term v))
-                                     (assoc var-map atom v)
+                                     (term/override-subterm result i (term/atomic-term vid))
+                                     (assoc var-map atom-id vid)
                                      dep-id (inc indep-id)))
-                            ;; Too many vars
                             (recur (inc i) result var-map dep-id indep-id))
                           ;; Dependent: appears 2+ on one side only
-                          ;; Skip SELF in op sequences
-                          (if (and (= atom :SELF))
+                          (if (== atom-id self-id)
                             (recur (inc i) result var-map dep-id indep-id)
                             (if (<= dep-id 9)
-                              (let [v (make-var \# dep-id)]
+                              (let [vid (make-var-id \# dep-id)]
                                 (recur (inc i)
-                                       (term/override-subterm result i (term/atomic-term v))
-                                       (assoc var-map atom v)
+                                       (term/override-subterm result i (term/atomic-term vid))
+                                       (assoc var-map atom-id vid)
                                        (inc dep-id) indep-id))
                               (recur (inc i) result var-map dep-id indep-id)))))
                       (recur (inc i) result var-map dep-id indep-id)))
@@ -295,50 +283,49 @@
       {:term imp-term :success? false})))
 
 (defn normalize-variables
-  "Normalize variable numbering in a term.
-   First variable seen becomes $1/#1/?1, second $2/#2/?2, etc."
+  "Normalize variable numbering in a term."
   [t]
   (loop [i 0
-         result t
-         indep-i 1
-         dep-i 1
-         query-i 1
-         normalized #{}
-         rename-map {}]
-    (if (>= i term/compound-term-size-max)
-      result
-      (let [atom (get result i)]
-        (if (and (variable? atom) (not (contains? normalized i)))
-          (let [var-type (cond (independent-var? atom) \$
-                              (dependent-var? atom) \#
-                              :else \?)
-                var-idx (case var-type
-                          \$ indep-i
-                          \# dep-i
-                          \? query-i)]
-            (if (contains? rename-map atom)
-              ;; Already renamed
-              (let [new-atom (get rename-map atom)]
-                (recur (inc i)
-                       (assoc result i new-atom)
-                       indep-i dep-i query-i
-                       (conj normalized i) rename-map))
-              ;; New variable, assign sequential ID
-              (let [new-atom (make-var var-type var-idx)
-                    ;; Replace all occurrences of this atom
-                    [result normalized]
-                    (loop [j i result result normalized normalized]
-                      (if (>= j term/compound-term-size-max)
-                        [result normalized]
-                        (if (= (get result j) atom)
-                          (recur (inc j)
-                                 (assoc result j new-atom)
-                                 (conj normalized j))
-                          (recur (inc j) result normalized))))]
-                (recur (inc i) result
-                       (if (= var-type \$) (inc indep-i) indep-i)
-                       (if (= var-type \#) (inc dep-i) dep-i)
-                       (if (= var-type \?) (inc query-i) query-i)
-                       normalized
-                       (assoc rename-map atom new-atom)))))
-          (recur (inc i) result indep-i dep-i query-i normalized rename-map))))))
+           result t
+           indep-i 1
+           dep-i 1
+           query-i 1
+           normalized #{}
+           rename-map {}]
+      (if (>= i term/compound-term-size-max)
+        result
+        (let [atom-id (term/term-get result i)]
+          (if (and (variable? atom-id) (not (contains? normalized i)))
+            (let [var-type (cond (independent-var? atom-id) \$
+                                (dependent-var? atom-id) \#
+                                :else \?)
+                  var-idx (case var-type
+                            \$ indep-i
+                            \# dep-i
+                            \? query-i)]
+              (if (contains? rename-map atom-id)
+                ;; Already renamed
+                (let [new-id (get rename-map atom-id)]
+                  (recur (inc i)
+                         (term/term-assoc result i new-id)
+                         indep-i dep-i query-i
+                         (conj normalized i) rename-map))
+                ;; New variable, assign sequential ID
+                (let [new-id (make-var-id var-type var-idx)
+                      ;; Replace all occurrences of this atom
+                      [result normalized]
+                      (loop [j i result result normalized normalized]
+                        (if (>= j term/compound-term-size-max)
+                          [result normalized]
+                          (if (== (term/term-get result j) atom-id)
+                            (recur (inc j)
+                                   (term/term-assoc result j new-id)
+                                   (conj normalized j))
+                            (recur (inc j) result normalized))))]
+                  (recur (inc i) result
+                         (if (= var-type \$) (inc indep-i) indep-i)
+                         (if (= var-type \#) (inc dep-i) dep-i)
+                         (if (= var-type \?) (inc query-i) query-i)
+                         normalized
+                         (assoc rename-map atom-id new-id)))))
+            (recur (inc i) result indep-i dep-i query-i normalized rename-map))))))

@@ -409,7 +409,7 @@
                   ;; From implication
                   (:implication decision)
                   (let [prec-with-op (term/extract-subterm (:term (:implication decision)) 1)]
-                    (or (when (= (term/term-root prec-with-op) term/sequence*)
+                    (or (when (== (term/term-root prec-with-op) term/sequence*)
                           (let [right (term/extract-subterm prec-with-op 2)]
                             (when (narsese/is-operation? right) right)))
                         (when (narsese/is-operation? prec-with-op) prec-with-op)
@@ -471,8 +471,8 @@
                                 (not (event/event-deleted? prec-event)))
                        (inference/belief-deduction prec-event imp))]
     (if-not (and result-event
-                 (some? (term/term-root (:term result-event)))
-                 (= (term/term-root (:term imp)) term/temporal-implication))
+                 (not (zero? (term/term-root (:term result-event))))
+                 (== (term/term-root (:term imp)) term/temporal-implication))
       [state result-event]
       (let [result-term (:term result-event)
             subs-ev (variable/unify (:term prec-concept) (:term prec-event))
@@ -495,7 +495,7 @@
   [imp subs-event prec-event result-event anticipation-threshold]
   (and (:success subs-event)
        (not (event/event-deleted? prec-event))
-       (= (term/term-root (:term imp)) term/temporal-implication)
+       (== (term/term-root (:term imp)) term/temporal-implication)
        (or (> (truth/truth-expectation
                 (:truth (or result-event {:truth {:frequency 0 :confidence 0}})))
               anticipation-threshold)

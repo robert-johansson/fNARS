@@ -12,6 +12,7 @@
             [fNARS.inference :as inference]
             [fNARS.narsese :as narsese]
             [fNARS.variable :as variable]
+            [fNARS.atom-registry :as ar]
             [fNARS.priority-queue :as pq]
             [fNARS.table :as table]
             [fNARS.concept :as concept]
@@ -58,7 +59,6 @@
         v2 {:frequency 1.0 :confidence 0.9}
         result (truth/truth-induction v1 v2 1.0)]
     (is (approx= (:frequency result) 1.0))
-    ;; Induction: w2c(f2*c2*c1) = w2c(0.81) = 0.81/1.81 ≈ 0.4475
     (is (approx= (:confidence result) (/ 0.81 1.81)))))
 
 (deftest test-truth-intersection
@@ -87,7 +87,7 @@
 
 (deftest test-term-atomic
   (let [t (term/atomic-term :cat)]
-    (is (= (term/term-root t) :cat))
+    (is (== (term/term-root t) (ar/intern-atom :cat)))
     (is (= (term/term-complexity t) 1))))
 
 (deftest test-term-compound
@@ -96,9 +96,9 @@
         inh (-> (term/atomic-term term/inheritance)
                 (term/override-subterm 1 subj)
                 (term/override-subterm 2 pred))]
-    (is (= (term/term-root inh) term/inheritance))
-    (is (= (term/term-root (term/extract-subterm inh 1)) :cat))
-    (is (= (term/term-root (term/extract-subterm inh 2)) :animal))
+    (is (== (term/term-root inh) term/inheritance))
+    (is (== (term/term-root (term/extract-subterm inh 1)) (ar/intern-atom :cat)))
+    (is (== (term/term-root (term/extract-subterm inh 2)) (ar/intern-atom :animal)))
     (is (= (term/term-complexity inh) 3))))
 
 (deftest test-term-equal
@@ -120,7 +120,6 @@
   (let [s1 [1 2 3]
         s2 [4 5 6]
         merged (stamp/stamp-make s1 s2)]
-    ;; Zip merge: 1, 4, 2, 5, 3, 6
     (is (= merged [1 4 2 5 3 6]))))
 
 (deftest test-stamp-overlap
@@ -158,9 +157,9 @@
         b (term/atomic-term :blue)
         {:keys [term success?]} (narsese/make-sequence a b)]
     (is success?)
-    (is (= (term/term-root term) term/sequence*))
-    (is (= (term/term-root (term/extract-subterm term 1)) :green))
-    (is (= (term/term-root (term/extract-subterm term 2)) :blue))))
+    (is (== (term/term-root term) term/sequence*))
+    (is (== (term/term-root (term/extract-subterm term 1)) (ar/intern-atom :green)))
+    (is (== (term/term-root (term/extract-subterm term 2)) (ar/intern-atom :blue)))))
 
 (deftest test-is-operation
   (let [op (term/atomic-term (keyword "^pick"))]
@@ -171,7 +170,7 @@
         op (term/atomic-term (keyword "^pick"))
         {:keys [term]} (narsese/make-sequence precond op)
         without-op (narsese/get-precondition-without-op term)]
-    (is (= (term/term-root without-op) :green))))
+    (is (== (term/term-root without-op) (ar/intern-atom :green)))))
 
 ;; === Inference Tests ===
 
@@ -191,7 +190,7 @@
                              :creation-time 11})
         result (inference/belief-intersection a b config)]
     (is (some? result))
-    (is (= (term/term-root (:term result)) term/sequence*))))
+    (is (== (term/term-root (:term result)) term/sequence*))))
 
 (deftest test-belief-induction
   (let [config nar-config/default-config
@@ -209,7 +208,7 @@
                              :creation-time 11})
         result (inference/belief-induction a b config)]
     (is (some? result))
-    (is (= (term/term-root (:term result)) term/temporal-implication))
+    (is (== (term/term-root (:term result)) term/temporal-implication))
     (is (approx= (:occurrence-time-offset result) 1.0))))
 
 (deftest test-revision-and-choice
@@ -227,43 +226,45 @@
                              :occurrence-time 10
                              :creation-time 10})
         {:keys [event revised?]} (inference/revision-and-choice a b 10 config)]
-    ;; Same term, same time, no overlap -> revision
     (is revised?)
     (is (> (:confidence (:truth event)) 0.9))))
 
 ;; === Variable Tests ===
 
 (deftest test-variable-predicates
-  (is (variable/independent-var? :$1))
-  (is (variable/dependent-var? :#1))
-  (is (variable/query-var? :?1))
-  (is (variable/variable? :$1))
-  (is (not (variable/variable? :cat))))
+  (is (variable/independent-var? (ar/intern-atom :$1)))
+  (is (variable/dependent-var? (ar/intern-atom :#1)))
+  (is (variable/query-var? (ar/intern-atom :?1)))
+  (is (variable/variable? (ar/intern-atom :$1)))
+  (is (not (variable/variable? (ar/intern-atom :cat)))))
 
 (deftest test-unify
   (let [general (-> (term/atomic-term term/inheritance)
                     (term/override-subterm 1 (term/atomic-term :$1))
                     (term/override-subterm 2 (term/atomic-term :animal)))
         specific (narsese/make-inheritance (term/atomic-term :cat) (term/atomic-term :animal))
-        result (variable/unify general specific)]
+        result (variable/unify general specific)
+        var-id (ar/intern-atom :$1)]
     (is (:success result))
-    (is (= (term/term-root (get (:substitution result) :$1)) :cat))))
+    (is (== (term/term-root (get (:substitution result) var-id)) (ar/intern-atom :cat)))))
 
 (deftest test-apply-substitute
   (let [general (-> (term/atomic-term term/inheritance)
                     (term/override-subterm 1 (term/atomic-term :$1))
                     (term/override-subterm 2 (term/atomic-term :animal)))
-        sub {:$1 (term/atomic-term :cat)}
+        var-id (ar/intern-atom :$1)
+        sub {var-id (term/atomic-term :cat)}
         result (variable/apply-substitute general sub)]
-    (is (= (term/term-root (term/extract-subterm result 1)) :cat))))
+    (is (== (term/term-root (term/extract-subterm result 1)) (ar/intern-atom :cat)))))
 
 (deftest test-normalize-variables
   (let [t (-> (term/atomic-term term/inheritance)
               (term/override-subterm 1 (term/atomic-term :$5))
               (term/override-subterm 2 (term/atomic-term :$5)))
-        normalized (variable/normalize-variables t)]
-    (is (= (get normalized 1) :$1))
-    (is (= (get normalized 2) :$1))))
+        normalized (variable/normalize-variables t)
+        $1-id (ar/intern-atom :$1)]
+    (is (== (get normalized 1) $1-id))
+    (is (== (get normalized 2) $1-id))))
 
 ;; === Priority Queue Tests ===
 
@@ -281,7 +282,6 @@
         {:keys [pq]} (pq/pq-push pq 0.5 :a)
         {:keys [pq]} (pq/pq-push pq 0.8 :b)
         {:keys [pq evicted]} (pq/pq-push pq 0.9 :c)]
-    ;; Should evict :a (lowest priority)
     (is (some? evicted))
     (is (= (:item evicted) :a))
     (is (= (pq/pq-count pq) 2))))
@@ -292,7 +292,7 @@
   (let [result (parser/parse-narsese "<cat --> animal>.")]
     (is (some? result))
     (is (= (:type result) :belief))
-    (is (= (term/term-root (:term result)) term/inheritance))))
+    (is (== (term/term-root (:term result)) term/inheritance))))
 
 (deftest test-parse-goal
   (let [result (parser/parse-narsese "<reward --> good>! :|:")]

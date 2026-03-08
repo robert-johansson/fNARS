@@ -1,6 +1,6 @@
 (ns fNARS.parser
   "Narsese parser using instaparse.
-   Parses Narsese sentences into {:term [...] :type :truth :tense} maps."
+   Parses Narsese sentences into {:term vector :type :truth :tense} maps."
   (:require [instaparse.core :as insta]
             [fNARS.term :as term]
             [fNARS.variable :as variable]
@@ -8,8 +8,6 @@
             [clojure.string :as str]))
 
 ;; -- Grammar --
-;; Rules prefixed with <> are hidden (suppressed from parse tree).
-;; Whitespace is consumed via <ws> so it never appears in the tree.
 
 (def narsese-grammar
   "sentence = dt? <ws>? term <ws>? punctuation <ws>? tense? <ws>? truth?
@@ -69,27 +67,25 @@
 ;; -- Tree Transform --
 
 (defn- build-binary-compound
-  "Build a left-nested binary compound from copula keyword and list of children."
-  [copula-kw children]
+  "Build a left-nested binary compound from copula integer ID and list of children."
+  [copula-id children]
   (reduce
     (fn [left right]
-      (-> (term/atomic-term copula-kw)
+      (-> (term/atomic-term copula-id)
           (term/override-subterm 1 left)
           (term/override-subterm 2 right)))
     children))
 
 (defn- build-set
-  "Build a set term. 1 element: {A @}. 2 elements: {A B}.
-   3+ elements: left-nest with set-element (.)."
+  "Build a set term."
   [set-copula children]
   (case (count children)
     1 (-> (term/atomic-term set-copula)
           (term/override-subterm 1 (first children))
-          (assoc 2 term/set-terminator))
+          (term/term-assoc 2 term/set-terminator))
     2 (-> (term/atomic-term set-copula)
           (term/override-subterm 1 (first children))
           (term/override-subterm 2 (second children)))
-    ;; 3+: left-nest elements with set-element, rightmost is last child
     (let [nested (reduce
                    (fn [left right]
                      (-> (term/atomic-term term/set-element)
@@ -123,7 +119,8 @@
                              (and (vector? x) (= :truth (first x)))
                              (assoc acc :truth (second x))
 
-                             (vector? x)
+                             ;; Term vector (64-element vector of ints)
+                             (and (vector? x) (== (count x) 64))
                              (assoc acc :term x)
 
                              :else acc))
@@ -164,7 +161,7 @@
                        (-> (term/atomic-term cop)
                            (term/override-subterm 1 left)
                            (term/override-subterm 2 right)))
-                      ([left right] ;; (* a b) prefix form
+                      ([left right]
                        (-> (term/atomic-term term/product)
                            (term/override-subterm 1 left)
                            (term/override-subterm 2 right))))
@@ -179,7 +176,7 @@
    :int-image2-op (constantly term/int-image2)
    :sequence-op (constantly term/sequence*)
    :conjunction-op (constantly term/conjunction)
-   :parallel-conjunction-op (constantly term/conjunction) ;; &| treated as &&
+   :parallel-conjunction-op (constantly term/conjunction)
    :disjunction-op (constantly term/disjunction)
    :negation (fn [child]
                (-> (term/atomic-term term/negation)
@@ -199,12 +196,7 @@
 ;; -- Public API --
 
 (defn parse-narsese
-  "Parse a complete Narsese sentence.
-   Returns {:term [...] :type :belief/:goal/:question
-            :truth {:frequency f :confidence c}
-            :tense :eternal/:present/:past/:future
-            :occurrence-time-offset n}
-   or nil if parsing fails."
+  "Parse a complete Narsese sentence."
   [input]
   (let [result (parser (str/trim input))]
     (when-not (insta/failure? result)

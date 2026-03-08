@@ -20,52 +20,122 @@
 ;; -- Declarative Inference (NAL 1-5) --
 ;; Matches ONA's Cycle_Inference (Cycle.c lines 971-1069).
 
+(defn- store-derived-implication
+  "Store a derived implication in the appropriate table.
+   ==> implications go to implication-links on postcondition concept.
+   =/> implications go to precondition-beliefs[op-id] on postcondition concept.
+   Matches ONA Memory_ProcessNewBeliefEvent (Memory.c:284-337)."
+  [state ev eternalize?]
+  (let [config (:config state)
+        current-time (:current-time state)
+        root (term/term-root (:term ev))
+        is-declarative? (== root term/implication)
+        is-temporal? (== root term/temporal-implication)]
+    (when (or is-declarative? is-temporal?)
+      (let [eternal-ev (event/event-eternalized ev (:horizon config))
+            subject (term/extract-subterm (:term ev) 1)
+            predicate (term/extract-subterm (:term ev) 2)
+            [state post-concept] (memory/conceptualize state predicate current-time)]
+        (when post-concept
+          (let [;; Determine op-id for temporal implications
+                op-id (if (and is-temporal? (== (term/term-root subject) term/sequence*))
+                        (let [potential-op (term/extract-subterm subject 2)]
+                          (if (narsese/is-operation? potential-op)
+                            (memory/get-operation-id state potential-op)
+                            0))
+                        0)
+                source-term (if (and is-temporal? (pos? op-id))
+                              (narsese/get-precondition-without-op subject)
+                              subject)
+                [state source-concept] (memory/conceptualize state source-term current-time)
+                imp (implication/make-implication
+                      {:term (:term ev)
+                       :truth (:truth eternal-ev)
+                       :stamp (:stamp eternal-ev)
+                       :occurrence-time-offset (:occurrence-time-offset ev 0.0)
+                       :source-concept-key (when source-concept (:term source-concept))
+                       :source-concept-id (when source-concept (:id source-concept))
+                       :creation-time current-time})]
+            (if is-declarative?
+              ;; ==> goes to implication-links
+              (let [existing-table (:implication-links post-concept (table/table-init))
+                    {:keys [table]} (table/table-add-and-revise
+                                      existing-table imp
+                                      #(inference/implication-revision %1 %2 config))]
+                (memory/update-concept state predicate
+                  #(assoc % :implication-links table)))
+              ;; =/> goes to precondition-beliefs[op-id]
+              (let [existing-table (get-in post-concept [:precondition-beliefs op-id]
+                                           (table/table-init))
+                    {:keys [table]} (table/table-add-and-revise
+                                      existing-table imp
+                                      #(inference/implication-revision %1 %2 config))]
+                (memory/update-concept state predicate
+                  #(assoc-in % [:precondition-beliefs op-id] table))))))))))
+
 (defn- add-derived-belief
   "Add a derived belief event to cycling PQ and conceptualize.
-   Matches Memory_AddEvent for derived beliefs."
+   Matches Memory_AddEvent for derived beliefs.
+   For implications, also stores in the appropriate table (implication-links or
+   precondition-beliefs) matching ONA Memory_ProcessNewBeliefEvent."
   [state ev priority eternalize?]
   (let [config (:config state)
         current-time (:current-time state)]
     (if (< (:confidence (:truth ev)) (:min-confidence config))
       state
-      (let [{:keys [pq]} (pq/pq-push (:cycling-belief-events state) priority ev)
-            state (assoc state :cycling-belief-events pq)
-            ;; Conceptualize and update beliefs
-            [state concept] (memory/conceptualize state (:term ev) current-time)]
-        (if-not concept
-          state
-          (let [temporal? (not= (:occurrence-time ev) truth/occurrence-eternal)
-                decay-epoch (:decay-epoch state)
-                concept-dur (:concept-durability config)
-                ;; Update belief spike for temporal events
-                state (if temporal?
-                        (memory/update-concept state (:term ev)
-                          (fn [c]
-                            (let [result (inference/revision-and-choice
-                                           (:belief-spike c) ev current-time config)]
-                              (-> c
-                                  (assoc :belief-spike (:event result))
-                                  (update :usage concept/usage-use current-time false)
-                                  (concept/priority-set-max priority decay-epoch concept-dur)))))
-                        state)
-                ;; Eternalize and update eternal belief
-                state (if eternalize?
-                        (let [eternal-ev (event/event-eternalized ev (:horizon config))]
-                          (memory/update-concept state (:term ev)
-                            (fn [c]
-                              (let [result (inference/revision-and-choice
-                                             (:belief c) eternal-ev current-time config)]
-                                (assoc c :belief (:event result))))))
-                        state)]
-            ;; Print derivation if configured
-            (if (:print-derivations config)
-              (update state :output conj
-                {:type :derived
-                 :term (:term ev)
-                 :truth (:truth ev)
-                 :occurrence-time (:occurrence-time ev)
-                 :time current-time})
-              state)))))))
+      (let [root (term/term-root (:term ev))
+            is-implication? (or (== root term/implication) (== root term/temporal-implication))
+            ;; Store implications in tables
+            state (if is-implication?
+                    (or (store-derived-implication state ev eternalize?) state)
+                    state)
+            ;; Derived temporal implications don't go to cycling PQ (ONA Memory.c:341)
+            ;; Derived ==> only go to PQ if not excluded (ALLOW_IMPLICATION_EVENTS=1 excludes derived)
+            skip-pq? (or (== root term/temporal-implication)
+                         (== root term/implication))
+            state (if skip-pq?
+                    state
+                    (let [{:keys [pq]} (pq/pq-push (:cycling-belief-events state) priority ev)]
+                      (assoc state :cycling-belief-events pq)))
+            ;; Conceptualize and update beliefs (skip for temporal implications)
+            state (if (== root term/temporal-implication)
+                    state
+                    (let [[state concept] (memory/conceptualize state (:term ev) current-time)]
+                      (if-not concept
+                        state
+                        (let [temporal? (not= (:occurrence-time ev) truth/occurrence-eternal)
+                              decay-epoch (:decay-epoch state)
+                              concept-dur (:concept-durability config)
+                              ;; Update belief spike for temporal events
+                              state (if temporal?
+                                      (memory/update-concept state (:term ev)
+                                        (fn [c]
+                                          (let [result (inference/revision-and-choice
+                                                         (:belief-spike c) ev current-time config)]
+                                            (-> c
+                                                (assoc :belief-spike (:event result))
+                                                (update :usage concept/usage-use current-time false)
+                                                (concept/priority-set-max priority decay-epoch concept-dur)))))
+                                      state)
+                              ;; Eternalize and update eternal belief
+                              state (if eternalize?
+                                      (let [eternal-ev (event/event-eternalized ev (:horizon config))]
+                                        (memory/update-concept state (:term ev)
+                                          (fn [c]
+                                            (let [result (inference/revision-and-choice
+                                                           (:belief c) eternal-ev current-time config)]
+                                              (assoc c :belief (:event result))))))
+                                      state)]
+                          ;; Print derivation if configured
+                          (if (:print-derivations config)
+                            (update state :output conj
+                              {:type :derived
+                               :term (:term ev)
+                               :truth (:truth ev)
+                               :occurrence-time (:occurrence-time ev)
+                               :time current-time})
+                            state)))))]
+        state))))
 
 (defn- select-belief-for-concept
   "Select the best belief from a concept for double-premise inference.
@@ -127,8 +197,8 @@
   (let [config (:config state)
         nal-level (:semantic-inference-nal-level config)
         root2 (term/term-root term2)
-        is-impl? (= root2 term/implication)
-        is-equiv? (= root2 term/equivalence)]
+        is-impl? (== root2 term/implication)
+        is-equiv? (== root2 term/equivalence)]
     (cond-> state
       ;; Implication or equivalence rules
       (or is-impl? is-equiv?)
@@ -149,7 +219,7 @@
                       state)
               ;; Deduction with remaining condition:
               ;; (A && B) ==> C, match A with term1 → (B ==> C)
-              state (if (and is-impl? (= (term/term-root impl-subject) term/conjunction))
+              state (if (and is-impl? (== (term/term-root impl-subject) term/conjunction))
                       (let [conj-left (term/extract-subterm impl-subject 1)
                             conj-right (term/extract-subterm impl-subject 2)
                             ;; Try left component first
@@ -186,7 +256,7 @@
           state))
 
       ;; Conjunction: anonymous analogy with dep var elimination
-      (= root2 term/conjunction)
+      (== root2 term/conjunction)
       (as-> state
         (let [conj-subject (term/extract-subterm term2 1)
               conj-predicate (term/extract-subterm term2 2)
@@ -352,7 +422,7 @@
     (if concept
       (let [;; Add sequences (without variables) to time index
             ;; Matching ONA: if SEQUENCE && !hasVariable(indep, dep)
-            state (if (and (= (term/term-root term) term/sequence*)
+            state (if (and (== (term/term-root term) term/sequence*)
                            (not (variable/has-variable? term true true false)))
                     (update state :time-index
                       memory/time-index-add term
@@ -395,7 +465,7 @@
     (if post-concept
       (let [;; Determine operation ID for table selection
             precondition-term (term/extract-subterm (:term imp) 1)
-            op-id (if (and (= (term/term-root precondition-term) term/sequence*))
+            op-id (if (and (== (term/term-root precondition-term) term/sequence*))
                     (let [op-term (term/extract-subterm precondition-term 2)]
                       (if (narsese/is-operation? op-term)
                         (memory/get-operation-id state op-term)
@@ -453,8 +523,8 @@
   (let [prec-root (term/term-root (:term prec-concept))]
     (if (or (is-op-concept? prec-concept)
             (= (:term prec-concept) (:term op-concept))
-            (= prec-root term/implication)
-            (= prec-root term/equivalence)
+            (== prec-root term/implication)
+            (== prec-root term/equivalence)
             (>= (:creation-time (:belief-spike prec-concept)) current-time)
             (stamp/stamp-overlap? (:stamp (:belief-spike prec-concept))
                                   (:stamp postcondition)))
@@ -503,8 +573,8 @@
           (if (or (not (or both-non-op? both-op?))
                   (= (:occurrence-time prec-ev) post-time)
                   (> (:creation-time prec-ev) current-time)
-                  (= prec-root term/equivalence)
-                  (= prec-root term/implication)
+                  (== prec-root term/equivalence)
+                  (== prec-root term/implication)
                   (stamp/stamp-overlap? (:stamp prec-ev) (:stamp postcondition)))
             state
             (let [seq-event (inference/belief-intersection prec-ev postcondition config)
@@ -686,12 +756,12 @@
   (let [config (:config state)
         current-time (:current-time state)
         goal-term (:term goal)]
-    (when (= (term/term-root goal-term) term/sequence*)
+    (when (== (term/term-root goal-term) term/sequence*)
       ;; Extract components right-to-left from left-nested sequence
       ;; (&/ (&/ A B) C) -> [C, B, A] (index 0=rightmost, i=leftmost)
       (let [components
             (loop [cur goal-term, comps []]
-              (if (= (term/term-root cur) term/sequence*)
+              (if (== (term/term-root cur) term/sequence*)
                 (recur (term/extract-subterm cur 1)
                        (conj comps (term/extract-subterm cur 2)))
                 (conj comps cur)))
@@ -854,6 +924,221 @@
       (dissoc state :pending-events)
       pending)))
 
+;; -- Declarative Anticipation --
+;; Matches ONA's Decision_Anticipate(0, not_used, true, currentTime) called from Cycle.c:1110-1114.
+;; For each concept with implication-links (==> implications), find matching precondition
+;; concepts, derive conclusions via belief-deduction, and update postcondition beliefs.
+
+(def ^:const top-k-declarative-implications 20)
+(def ^:const belief-last-used-tolerance 5)
+
+(defn- apply-both-substitutions
+  "Apply two substitutions to a term, returning [term success?]."
+  [result-term subs1 subs2]
+  (let [t1 (if (:success subs1)
+             (variable/apply-substitute result-term (:substitution subs1))
+             nil)
+        t2 (if (and t1 (:success subs2))
+             (variable/apply-substitute t1 (:substitution subs2))
+             nil)]
+    (if (and t1 t2)
+      [t2 true]
+      (cond
+        (and t1 (:success subs1)) [t1 true]
+        (and (:success subs2))
+        (let [t (variable/apply-substitute result-term (:substitution subs2))]
+          [t true])
+        :else [result-term false]))))
+
+(defn- update-eternal-from-declarative
+  "Update postcondition concept's eternal belief from a declarative derivation.
+   Matches ONA Decision.c:718-734 (ETERNAL BELIEF UPDATE, no stamp check)."
+  [state result-eternal sub-prec sub-additional current-time config]
+  (let [[result-term success?]
+        (if (or (:success sub-prec) (:success sub-additional))
+          (let [t1 (if (:success sub-prec)
+                     (variable/apply-substitute (:term result-eternal) (:substitution sub-prec))
+                     (:term result-eternal))
+                t2 (if (:success sub-additional)
+                     (variable/apply-substitute t1 (:substitution sub-additional))
+                     t1)]
+            [t2 (and (or (:success sub-prec) true)
+                     (or (:success sub-additional) true))])
+          [(:term result-eternal) false])]
+    (if-not (and success? (not (zero? (term/term-root result-term))))
+      state
+      (let [result-eternal (assoc result-eternal :term result-term)
+            ;; Handle negation: if result is (-- X), unwrap and negate truth
+            root (term/term-root result-term)
+            [result-eternal negated?]
+            (if (== root term/negation)
+              (let [inner (term/extract-subterm result-term 1)]
+                [(assoc result-eternal
+                   :term inner
+                   :truth (truth/truth-negation (:truth result-eternal))) true])
+              [result-eternal false])
+            result-term (:term result-eternal)
+            [state c] (memory/conceptualize state result-term current-time)]
+        (if-not c
+          state
+          (let [existing (:belief c)]
+            (if (stamp/stamp-equal (:stamp existing) (:stamp result-eternal))
+              state
+              (let [updated (inference/revision-and-choice existing result-eternal current-time config)]
+                (if (not (truth/truth-equal (:truth existing) (:truth (:event updated))))
+                  (let [state (memory/update-concept state result-term
+                                #(assoc % :belief (:event updated)))]
+                    ;; Output the derived belief
+                    (update state :output conj
+                      {:type :derived
+                       :term result-term
+                       :truth (:truth (:event updated))
+                       :event-type event/event-type-belief
+                       :occurrence-time truth/occurrence-eternal}))
+                  state)))))))))
+
+(defn- update-spike-from-declarative
+  "Update postcondition concept's belief spike from a declarative ==> derivation.
+   Matches ONA Decision.c:752-774 (BELIEF EVENTS UPDATE for ==> implications)."
+  [state result-event sub-prec sub-additional current-time config]
+  (let [[result-term success?]
+        (if (or (:success sub-prec) (:success sub-additional))
+          (let [t1 (if (:success sub-prec)
+                     (variable/apply-substitute (:term result-event) (:substitution sub-prec))
+                     (:term result-event))
+                t2 (if (:success sub-additional)
+                     (variable/apply-substitute t1 (:substitution sub-additional))
+                     t1)]
+            [t2 true])
+          [(:term result-event) false])]
+    (if-not (and success? (not (zero? (term/term-root result-term))))
+      state
+      (let [result-event (assoc result-event :term result-term)
+            ;; Handle negation
+            root (term/term-root result-term)
+            [result-event _negated?]
+            (if (== root term/negation)
+              (let [inner (term/extract-subterm result-term 1)]
+                [(assoc result-event
+                   :term inner
+                   :truth (truth/truth-negation (:truth result-event))) true])
+              [result-event false])
+            result-term (:term result-event)
+            [state c] (memory/conceptualize state result-term current-time)]
+        (if-not c
+          state
+          (let [spike (:belief-spike c)]
+            (if (or (event/event-deleted? spike)
+                    (>= (:occurrence-time result-event) (:occurrence-time spike)))
+              (let [updated (inference/revision-and-choice spike result-event current-time config)]
+                (if (or (event/event-deleted? spike)
+                        (not (truth/truth-equal (:truth spike) (:truth (:event updated)))))
+                  (let [state (memory/update-concept state result-term
+                                #(assoc % :belief-spike (:event updated)))
+                        ;; Also eternalize into eternal belief
+                        eternal-ev (event/event-eternalized (:event updated) (:horizon config))
+                        state (memory/update-concept state result-term
+                                (fn [c]
+                                  (let [r (inference/revision-and-choice
+                                            (:belief c) eternal-ev current-time config)]
+                                    (assoc c :belief (:event r)
+                                             ;; Update creation-time for metrics
+                                             ))))]
+                    (update state :output conj
+                      {:type :derived
+                       :term result-term
+                       :truth (:truth (:event updated))
+                       :event-type event/event-type-belief
+                       :occurrence-time (:occurrence-time (:event updated))}))
+                  state))
+              state)))))))
+
+(defn- process-declarative-implication
+  "Process one declarative ==> implication: scan all concepts for matching
+   preconditions, derive conclusions, update beliefs.
+   Matches ONA Decision.c:609-809 inner loop for declarative implications."
+  [state imp current-time config]
+  (let [imp-precon (term/extract-subterm (:term imp) 1)]
+    (reduce
+      (fn [state [concept-term concept]]
+        ;; Skip concepts with variables (ONA Decision.c:612-615)
+        (if (variable/has-variable? (:term concept))
+          state
+          (let [prec-eternal (:belief concept)
+                prec-event (:belief-spike concept)
+                ;; BELIEF_LAST_USED_TOLERANCE check (ONA Decision.c:620)
+                skip? (and (< (:creation-time prec-eternal 0) (- current-time belief-last-used-tolerance))
+                           (< (:creation-time prec-event 0) (- current-time belief-last-used-tolerance)))]
+            (if skip?
+              state
+              (let [subs-eternal (when-not (event/event-deleted? prec-eternal)
+                                   (variable/unify imp-precon (:term prec-eternal)))
+                    subs-event (when-not (event/event-deleted? prec-event)
+                                 (variable/unify imp-precon (:term prec-event)))]
+                (if-not (or (:success subs-eternal) (:success subs-event))
+                  state
+                  (let [;; Derive conclusions
+                        result-eternal (when (and (:success subs-eternal)
+                                                   (not (event/event-deleted? prec-eternal)))
+                                         (inference/belief-deduction prec-eternal imp))
+                        result-event (when (and (:success subs-event)
+                                                 (not (event/event-deleted? prec-event)))
+                                       (inference/belief-deduction prec-event imp))
+                        ;; Compute substitutions from concept term
+                        sub-prec-eternal (when (:success subs-eternal)
+                                           (variable/unify (:term concept) (:term prec-eternal)))
+                        sub-prec-event (when (:success subs-event)
+                                         (variable/unify (:term concept) (:term prec-event)))
+                        ;; Update eternal belief
+                        state (if (and result-eternal
+                                       (not (zero? (term/term-root (:term result-eternal)))))
+                                (update-eternal-from-declarative
+                                  state result-eternal sub-prec-eternal subs-eternal
+                                  current-time config)
+                                state)
+                        ;; Update belief spike for ==> implications
+                        state (if (and result-event
+                                       (not (zero? (term/term-root (:term result-event)))))
+                                (update-spike-from-declarative
+                                  state result-event sub-prec-event subs-event
+                                  current-time config)
+                                state)]
+                    state)))))))
+      state
+      (:concepts state))))
+
+(defn- declarative-anticipate
+  "Process declarative implications each cycle.
+   Matches ONA Cycle.c:1110-1114 calling Decision_Anticipate(0, _, true, currentTime).
+   Iterates all concepts with implication-links, processing up to
+   TOP_K_DECLARATIVE_IMPLICATIONS ==> implications per concept."
+  [state]
+  (let [config (:config state)]
+    (if-not (:declarative-implications-cycle-process config true)
+      state
+      (let [current-time (:current-time state)]
+        (reduce
+          (fn [state [_postc-term postc]]
+            (let [imp-links (:implication-links postc)
+                  items (when imp-links (:items imp-links))]
+              (if (or (nil? items) (empty? items))
+                state
+                ;; Process implications, limiting declarative ones to top-k
+                (loop [remaining (seq items)
+                       state state
+                       decl-count 0]
+                  (if-not remaining
+                    state
+                    (let [imp (first remaining)
+                          is-decl? (== (term/term-root (:term imp)) term/implication)]
+                      (if (and is-decl? (> decl-count top-k-declarative-implications))
+                        (recur (next remaining) state decl-count)
+                        (recur (next remaining)
+                               (process-declarative-implication state imp current-time config)
+                               (if is-decl? (inc decl-count) decl-count)))))))))
+          state
+          (:concepts state))))))
+
 ;; -- Main Cycle --
 
 (defn cycle-perform
@@ -865,6 +1150,7 @@
       process-pending-events
       select-belief-events
       process-belief-events
+      declarative-anticipate
       process-goal-events
       apply-forgetting
       (dissoc :selected-beliefs)

@@ -1,12 +1,13 @@
 (ns fNARS.shell
-  "Interactive shell / REPL for the NAR.
-   Process input lines (Narsese statements, cycle counts, commands)."
+  "Interactive shell / REPL for the NAR."
   (:require [fNARS.nar :as nar]
             [fNARS.parser :as parser]
             [fNARS.truth :as truth]
             [fNARS.term :as term]
             [fNARS.event :as event]
             [fNARS.concept :as concept]
+            [fNARS.atom-registry :as ar]
+            [fNARS.rule-table :as rule-table]
             [fNARS.platform :as p]
             [clojure.string :as str]))
 
@@ -20,65 +21,53 @@
   [t]
   (let [root (term/term-root t)]
     (cond
-      (nil? root) "@"
+      (zero? root) "@"
 
-      ;; Inheritance: <S --> P>
-      (= root term/inheritance)
+      (== root term/inheritance)
       (str "<" (format-term (term/extract-subterm t 1))
            " --> " (format-term (term/extract-subterm t 2)) ">")
 
-      ;; Similarity: <S <-> P>
-      (= root term/similarity)
+      (== root term/similarity)
       (str "<" (format-term (term/extract-subterm t 1))
            " <-> " (format-term (term/extract-subterm t 2)) ">")
 
-      ;; Temporal implication: <S =/> P>
-      (= root term/temporal-implication)
+      (== root term/temporal-implication)
       (str "<" (format-term (term/extract-subterm t 1))
            " =/> " (format-term (term/extract-subterm t 2)) ">")
 
-      ;; Implication: <S ==> P>
-      (= root term/implication)
+      (== root term/implication)
       (str "<" (format-term (term/extract-subterm t 1))
            " ==> " (format-term (term/extract-subterm t 2)) ">")
 
-      ;; Equivalence: <S <=> P>
-      (= root term/equivalence)
+      (== root term/equivalence)
       (str "<" (format-term (term/extract-subterm t 1))
            " <=> " (format-term (term/extract-subterm t 2)) ">")
 
-      ;; Sequence: (&/ S P)
-      (= root term/sequence*)
+      (== root term/sequence*)
       (str "(&/ " (format-term (term/extract-subterm t 1))
            " " (format-term (term/extract-subterm t 2)) ")")
 
-      ;; Conjunction: (&& S P)
-      (= root term/conjunction)
+      (== root term/conjunction)
       (str "(&& " (format-term (term/extract-subterm t 1))
            " " (format-term (term/extract-subterm t 2)) ")")
 
-      ;; Product: (* S P)
-      (= root term/product)
+      (== root term/product)
       (str "(* " (format-term (term/extract-subterm t 1))
            " " (format-term (term/extract-subterm t 2)) ")")
 
-      ;; Negation: (-- S)
-      (= root term/negation)
+      (== root term/negation)
       (str "(-- " (format-term (term/extract-subterm t 1)) ")")
 
-      ;; Ext set: {x}
-      (= root term/ext-set)
+      (== root term/ext-set)
       (str "{" (format-term (term/extract-subterm t 1)) "}")
 
-      ;; Int set: [x]
-      (= root term/int-set)
+      (== root term/int-set)
       (str "[" (format-term (term/extract-subterm t 1)) "]")
 
-      ;; Atomic term
-      (keyword? root)
-      (name root)
-
-      :else (str root))))
+      :else
+      (if-let [kw (ar/resolve-atom root)]
+        (name kw)
+        (str root)))))
 
 (defn- format-output-entry
   "Format a single output entry for display."
@@ -129,14 +118,12 @@
   [state line]
   (let [line (str/trim line)]
     (cond
-      ;; Empty line: run 1 cycle
       (empty? line)
       (let [state (nar/nar-cycles state 1)
             {:keys [output state]} (nar/nar-get-output state)]
         {:state state
          :output (str/join "\n" (map format-output-entry output))})
 
-      ;; Numeric: run N cycles
       (re-matches #"\d+" line)
       (let [n (p/parse-int line)
             state (nar/nar-cycles state n)
@@ -144,7 +131,6 @@
         {:state state
          :output (str/join "\n" (map format-output-entry output))})
 
-      ;; Commands
       (= line "*reset")
       {:state (nar/nar-init (:config state))
        :output "Reset."}
@@ -200,10 +186,23 @@
         {:state (assoc-in state [:config :babbling-ops] val)
          :output (str "Babbling ops set to " val)})
 
+      (str/starts-with? line "*setsemanticinferencenallevel=")
+      (let [val (p/parse-int (subs line 30))
+            rules (rule-table/rules-for-level val)
+            index (rule-table/build-rule-index rules)]
+        {:state (-> state
+                    (assoc-in [:config :semantic-inference-nal-level] val)
+                    (assoc :nal-rules rules :nal-rule-index index))
+         :output (str "Semantic inference NAL level set to " val)})
+
+      (str/starts-with? line "*anticipationconfidence=")
+      (let [val (p/parse-float (subs line 23))]
+        {:state (assoc-in state [:config :anticipation-confidence] val)
+         :output (str "Anticipation confidence set to " val)})
+
       (str/starts-with? line "//")
       {:state state :output ""}
 
-      ;; Narsese input
       :else
       (if-let [parsed (parser/parse-narsese line)]
         (let [{:keys [term type truth tense occurrence-time-offset]} parsed
@@ -214,7 +213,6 @@
                       :goal   (nar/nar-add-input state term event/event-type-goal truth)
                       :question state
                       state)
-              ;; Handle question answering
               [state question-output]
               (if (= type :question)
                 (let [{:keys [state answer]} (nar/nar-answer-question state term tense)]

@@ -70,6 +70,7 @@
    :allow-concurrent-implications   true
    :nop-subgoaling                  true
    :restricted-concept-creation     false
+   :declarative-implications-cycle-process true
 
    ;; Occurrence time index
    :occurrence-time-index-size      512

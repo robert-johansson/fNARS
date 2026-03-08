@@ -4,10 +4,11 @@
   (:require [fNARS.nar :as nar]
             [fNARS.shell :as shell]
             [fNARS.platform :as p]
+            [fNARS.nal-runner :as nal-runner]
             #?(:cljs ["readline" :as readline]))
   #?(:clj (:gen-class)))
 
-(defn -main [& args]
+(defn- run-repl []
   (println "fNARS - Functional Non-Axiomatic Reasoning System")
   (println "Sensorimotor ONA port (NAL 6-8)")
   (println "Type Narsese statements, numbers (for cycles), or *commands.")
@@ -42,3 +43,8 @@
                (recur (:state result)))
              (println "\nBye.")))
          (p/exit 0))))
+
+(defn -main [& args]
+  (if (and (seq args) (= (first args) "nal"))
+    (nal-runner/-main (second args))
+    (run-repl)))

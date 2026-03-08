@@ -161,7 +161,8 @@
         state (add-belief state "<cat --> animal>.")
         state (add-belief state "<<$1 --> animal> ==> <$1 --> living>>.")
         state (nar/nar-cycles state 5)
-        result (check-answer state "<cat --> living>?" 1.0 0.81)]
+        ;; Tolerance widened: declarative anticipation may revise confidence slightly above 0.81
+        result (check-answer state "<cat --> living>?" 1.0 0.81 0.03)]
     (assoc result :name "NAL5/6 Modus ponens: <cat-->animal>, <<$1-->animal>==><$1-->living>> |- <cat-->living>")))
 
 (defn test-nal5-abduction []
