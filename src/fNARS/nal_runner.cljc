@@ -4,12 +4,7 @@
   (:require [fNARS.nar :as nar]
             [fNARS.nar-config :as nar-config]
             [fNARS.parser :as parser]
-            [fNARS.event :as event]
-            [fNARS.truth :as truth]
-            [fNARS.narsese :as narsese]
             [fNARS.shell :as shell]
-            [fNARS.variable :as variable]
-            [fNARS.term :as term]
             [fNARS.platform :as p]
             [clojure.string :as str]))
 
@@ -22,9 +17,6 @@
 
 (defn- cycle-count? [line]
   (re-matches #"\d+" (str/trim line)))
-
-(defn- config-command? [line]
-  (str/starts-with? (str/trim line) "*"))
 
 (defn- expected-line? [line]
   (let [trimmed (str/trim line)]
@@ -66,38 +58,6 @@
 
           :else nil)))))
 
-;; -- Config handling --
-
-(defn- apply-config [state line]
-  (let [trimmed (str/trim line)]
-    (cond
-      (or (= trimmed "*motorbabbling=false")
-          (= trimmed "*motorbabbling=0"))
-      (update state :config assoc :motor-babbling-chance 0.0)
-
-      (str/starts-with? trimmed "*volume=")
-      state ;; volume is display-only
-
-      (str/starts-with? trimmed "*setopname")
-      (let [[_ id-str name-str] (re-find #"\*setopname\s+(\d+)\s+(\S+)" trimmed)]
-        (when (and id-str name-str)
-          (nar/nar-add-operation state name-str (fn [s _] s))))
-
-      (= trimmed "*reset")
-      (nar/nar-init (:config state))
-
-      (str/starts-with? trimmed "*anticipationconfidence=")
-      (let [val (p/parse-float (subs trimmed (count "*anticipationconfidence=")))]
-        (update state :config assoc :anticipation-confidence val))
-
-      (= trimmed "*concurrent")
-      (update state :current-time dec)
-
-      (str/starts-with? trimmed "*setopstdin ")
-      state
-
-      :else state)))
-
 ;; -- Answer checking --
 
 (defn- approx= [a b tolerance]
@@ -127,8 +87,7 @@
 
 (defn- check-execution [output expected]
   "Check if the expected operation was executed in the output."
-  (let [op-kw (keyword (subs (:operation expected) 1)) ;; ^left -> :left... no, ^left -> :^left
-        op-name (:operation expected)]
+  (let [op-name (:operation expected)]
     (if (some (fn [o]
                 (and (= (:type o) :execution)
                      (str/includes? (str (:operation o)) op-name)))
@@ -150,7 +109,7 @@
     (loop [state (nar/nar-init config)
            remaining lines
            results []
-           pending-expected []]
+           pending-output []]
       (if (empty? remaining)
         ;; Done — report results
         (let [checks (filter some? results)
@@ -184,58 +143,25 @@
                                                      " f=" (:frequency (:truth expected))
                                                      " c=" (:confidence (:truth expected)))))
                                :execution
-                               (let [{:keys [output]} (nar/nar-get-output state)
-                                     r (check-execution output expected)]
+                               (let [r (check-execution pending-output expected)]
                                  (assoc r :desc (str "Execution: " (:operation expected))))
                                nil)]
                   (recur state rest-lines (if result (conj results result) results) []))
-                (recur state rest-lines results pending-expected)))
+                (recur state rest-lines results pending-output)))
 
-            ;; Config command
-            (config-command? line)
-            (let [new-state (apply-config state trimmed)]
-              (recur (or new-state state) rest-lines results pending-expected))
-
-            ;; Cycle count
-            (cycle-count? line)
-            (let [n (p/parse-int trimmed)]
-              (when verbose (println (str "  [" n " cycles]")))
-              (recur (nar/nar-cycles state n) rest-lines results pending-expected))
-
-            ;; Narsese input
+            ;; Everything else is executed by the shell line handler for parity.
             :else
-            (let [parsed (parser/parse-narsese trimmed)]
-              (if-not parsed
-                (do
-                  (when verbose (println (str "  SKIP (unparseable): " trimmed)))
-                  (recur state rest-lines results pending-expected))
-                (let [ev-type (case (:type parsed)
-                                :belief event/event-type-belief
-                                :goal event/event-type-goal
-                                :question nil
-                                event/event-type-belief)
-                      tense (:tense parsed)]
-                  (if (= (:type parsed) :question)
-                    ;; Questions — just run through, answer checked by //expected
-                    (let [{:keys [state answer]} (nar/nar-answer-question
-                                                   state (:term parsed)
-                                                   (or tense :eternal))]
-                      (when verbose
-                        (println (str "  Q: " trimmed
-                                     (if answer
-                                       (str " → f=" (:frequency (:truth answer))
-                                            " c=" (:confidence (:truth answer)))
-                                       " → None"))))
-                      (recur state rest-lines results pending-expected))
-                    ;; Belief or goal
-                    (let [eternal? (= tense :eternal)
-                          state (nar/nar-add-input state (:term parsed) ev-type
-                                  (or (:truth parsed) truth/default-truth)
-                                  {:eternal? eternal?
-                                   :occurrence-time-offset (:occurrence-time-offset parsed 0.0)})]
-                      (when verbose
-                        (println (str "  " (if (= ev-type event/event-type-goal) "!" ".") " " trimmed)))
-                      (recur state rest-lines results pending-expected))))))))))))
+            (let [{:keys [state entries messages]} (shell/execute-line state trimmed)]
+              (when verbose
+                (when (cycle-count? trimmed)
+                  (println (str "  [" trimmed " cycles]")))
+                (when (seq entries)
+                  (doseq [entry entries]
+                    (println (str "  OUT " entry))))
+                (when (seq messages)
+                  (doseq [message messages]
+                    (println (str "  MSG " message)))))
+              (recur state rest-lines results (into pending-output entries)))))))))
 
 ;; -- Entry point --
 

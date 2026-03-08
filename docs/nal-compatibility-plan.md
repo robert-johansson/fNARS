@@ -38,6 +38,19 @@ Known false lead:
 - `door.nal` fails in fNARS, but ONA also returns `None`, so it is not a
   useful compatibility target.
 
+## Progress Checkpoint (2026-03-08)
+
+Completed:
+
+- Workstream 1: compatibility harness (`bb nal:compat`)
+- Workstream 3 (partial): `*concurrent` and `*setopstdin` support in shell path
+- Workstream 2: shared line execution path (`shell/execute-line`) now used by
+  `.nal` replay runner
+
+Next:
+
+- Workstream 4: align `*setopname` operator-slot semantics with ONA
+
 ## Strategy
 
 Do not start by rewriting the inference engine.

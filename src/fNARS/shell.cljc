@@ -113,8 +113,9 @@
                          (str " spike=" (format-truth (:truth (:belief-spike c)))))))
                 (take 20 sorted))))))
 
-(defn process-input
-  "Process a single input line. Returns {:state new-state :output string}."
+(defn execute-line
+  "Execute a single shell line and return structured output.
+   Returns {:state new-state :entries [...] :messages [...]}."
   [state line]
   (let [line (str/trim line)]
     (cond
@@ -122,37 +123,44 @@
       (let [state (nar/nar-cycles state 1)
             {:keys [output state]} (nar/nar-get-output state)]
         {:state state
-         :output (str/join "\n" (map format-output-entry output))})
+         :entries output
+         :messages []})
 
       (re-matches #"\d+" line)
       (let [n (p/parse-int line)
             state (nar/nar-cycles state n)
             {:keys [output state]} (nar/nar-get-output state)]
         {:state state
-         :output (str/join "\n" (map format-output-entry output))})
+         :entries output
+         :messages []})
 
       (= line "*reset")
       {:state (nar/nar-init (:config state))
-       :output "Reset."}
+       :entries []
+       :messages ["Reset."]}
 
       (= line "*concepts")
       {:state state
-       :output (concepts-report state)}
+       :entries []
+       :messages [(concepts-report state)]}
 
       (str/starts-with? line "*volume=")
       (let [vol (p/parse-int (subs line 8))]
         {:state (assoc-in state [:config :volume] vol)
-         :output (str "Volume set to " vol)})
+         :entries []
+         :messages [(str "Volume set to " vol)]})
 
       (str/starts-with? line "*motorbabbling=")
       (let [val (p/parse-float (subs line 15))]
         {:state (assoc-in state [:config :motor-babbling-chance] val)
-         :output (str "Motor babbling chance set to " val)})
+         :entries []
+         :messages [(str "Motor babbling chance set to " val)]})
 
       (str/starts-with? line "*decisionthreshold=")
       (let [val (p/parse-float (subs line 19))]
         {:state (assoc-in state [:config :decision-threshold] val)
-         :output (str "Decision threshold set to " val)})
+         :entries []
+         :messages [(str "Decision threshold set to " val)]})
 
       (str/starts-with? line "*setopname ")
       (let [parts (str/split (str/trim line) #"\s+")
@@ -163,7 +171,8 @@
                    :atom (keyword op-name)
                    :action (fn [s _] s)
                    :args []})
-         :output (str "Set operation " op-idx " to " op-name)})
+         :entries []
+         :messages [(str "Set operation " op-idx " to " op-name)]})
 
       (str/starts-with? line "*setoparg ")
       (let [parts (str/split (str/trim line) #"\s+" 4)
@@ -179,12 +188,14 @@
                           needed (max (count args) arg-idx)
                           args (vec (take needed (concat args (repeat nil))))]
                       (assoc args (dec arg-idx) arg-term))))
-         :output (str "Set operation " op-idx " arg " arg-idx " to " arg-str)})
+         :entries []
+         :messages [(str "Set operation " op-idx " arg " arg-idx " to " arg-str)]})
 
       (str/starts-with? line "*babblingops=")
       (let [val (p/parse-int (subs line 13))]
         {:state (assoc-in state [:config :babbling-ops] val)
-         :output (str "Babbling ops set to " val)})
+         :entries []
+         :messages [(str "Babbling ops set to " val)]})
 
       (str/starts-with? line "*setsemanticinferencenallevel=")
       (let [val (p/parse-int (subs line 30))
@@ -193,26 +204,30 @@
         {:state (-> state
                     (assoc-in [:config :semantic-inference-nal-level] val)
                     (assoc :nal-rules rules :nal-rule-index index))
-         :output (str "Semantic inference NAL level set to " val)})
+         :entries []
+         :messages [(str "Semantic inference NAL level set to " val)]})
 
       (str/starts-with? line "*anticipationconfidence=")
       (let [val (p/parse-float (subs line 23))]
         {:state (assoc-in state [:config :anticipation-confidence] val)
-         :output (str "Anticipation confidence set to " val)})
+         :entries []
+         :messages [(str "Anticipation confidence set to " val)]})
 
       (str/starts-with? line "*setopstdin ")
       ;; ONA shell supports this for channel integration. fNARS has no stdin op channel,
       ;; so we accept it as a compatibility no-op for .nal replay parity.
       {:state state
-       :output "Set op stdin (no-op in fNARS)"}
+       :entries []
+       :messages ["Set op stdin (no-op in fNARS)"]}
 
       (= line "*concurrent")
       ;; ONA shell semantics: decrement currentTime by 1.
       {:state (update state :current-time dec)
-       :output ""}
+       :entries []
+       :messages []}
 
       (str/starts-with? line "//")
-      {:state state :output ""}
+      {:state state :entries [] :messages []}
 
       :else
       (if-let [parsed (parser/parse-narsese line)]
@@ -237,8 +252,16 @@
                 [state nil])
               {:keys [output state]} (nar/nar-get-output state)]
           {:state state
-           :output (str/join "\n" (filter seq
-                     (concat (map format-output-entry output)
-                             (when question-output [question-output]))))})
+           :entries output
+           :messages (vec (filter seq (when question-output [question-output])))})
         {:state state
-         :output (str "//Failed to parse: " line)}))))
+         :entries []
+         :messages [(str "//Failed to parse: " line)]}))))
+
+(defn process-input
+  "Process a single input line. Returns {:state new-state :output string}."
+  [state line]
+  (let [{:keys [state entries messages]} (execute-line state line)
+        rendered (concat (map format-output-entry entries) messages)]
+    {:state state
+     :output (str/join "\n" (filter seq rendered))}))
