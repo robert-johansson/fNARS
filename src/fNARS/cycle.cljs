@@ -13,7 +13,151 @@
             [fNARS.concept :as concept]
             [fNARS.priority-queue :as pq]
             [fNARS.table :as table]
-            [fNARS.implication :as implication]))
+            [fNARS.implication :as implication]
+            [fNARS.rule-table :as rule-table]))
+
+;; -- Declarative Inference (NAL 1-5) --
+;; Matches ONA's Cycle_Inference (Cycle.c lines 971-1069).
+
+(defn- add-derived-belief
+  "Add a derived belief event to cycling PQ and conceptualize.
+   Matches Memory_AddEvent for derived beliefs."
+  [state ev priority eternalize?]
+  (let [config (:config state)
+        current-time (:current-time state)]
+    (if (< (:confidence (:truth ev)) (:min-confidence config))
+      state
+      (let [{:keys [pq]} (pq/pq-push (:cycling-belief-events state) priority ev)
+            state (assoc state :cycling-belief-events pq)
+            ;; Conceptualize and update beliefs
+            [state concept] (memory/conceptualize state (:term ev) current-time)]
+        (if-not concept
+          state
+          (let [temporal? (not= (:occurrence-time ev) truth/occurrence-eternal)
+                ;; Update belief spike for temporal events
+                state (if temporal?
+                        (memory/update-concept state (:term ev)
+                          (fn [c]
+                            (let [result (inference/revision-and-choice
+                                           (:belief-spike c) ev current-time config)]
+                              (-> c
+                                  (assoc :belief-spike (:event result))
+                                  (update :usage concept/usage-use current-time false)
+                                  (update :priority max priority)))))
+                        state)
+                ;; Eternalize and update eternal belief
+                state (if eternalize?
+                        (let [eternal-ev (event/event-eternalized ev (:horizon config))]
+                          (memory/update-concept state (:term ev)
+                            (fn [c]
+                              (let [result (inference/revision-and-choice
+                                             (:belief c) eternal-ev current-time config)]
+                                (assoc c :belief (:event result))))))
+                        state)]
+            ;; Print derivation if configured
+            (if (:print-derivations config)
+              (update state :output conj
+                {:type :derived
+                 :term (:term ev)
+                 :truth (:truth ev)
+                 :occurrence-time (:occurrence-time ev)
+                 :time current-time})
+              state)))))))
+
+(defn- select-belief-for-concept
+  "Select the best belief from a concept for double-premise inference.
+   Prefers temporal spike within EVENT_BELIEF_DISTANCE, else uses eternal.
+   Returns {:belief event :eternalize? bool} or nil."
+  [concept event-occurrence config]
+  (let [eternal (:belief concept)
+        spike (:belief-spike concept)
+        use-spike? (and (not (event/event-deleted? spike))
+                        (not= event-occurrence truth/occurrence-eternal)
+                        (< (js/Math.abs (- event-occurrence (:occurrence-time spike)))
+                           (:event-belief-distance config)))
+        belief (if use-spike?
+                 (assoc spike :truth
+                   (truth/truth-projection (:truth spike)
+                     (:occurrence-time spike) event-occurrence
+                     (:projection-decay config)))
+                 eternal)]
+    (when (and belief (not (event/event-deleted? belief)))
+      {:belief belief :eternalize? (not use-spike?)})))
+
+(defn- cycle-inference
+  "Run declarative NAL 1-5 inference for a selected belief event.
+   Matches ONA's Cycle_Inference (Cycle.c:971-1069).
+   Single-premise: apply R1 rules to selected event alone.
+   Double-premise: for each related concept, pair with concept's belief and apply R2 rules."
+  [state selected-belief]
+  (let [config (:config state)
+        nal-level (:semantic-inference-nal-level config)]
+    (if (<= nal-level 0)
+      state
+      (let [rules (:nal-rules state)
+            ev (:event selected-belief)
+            priority (:priority selected-belief)
+            current-time (:current-time state)
+            term1 (:term ev)
+            truth1 (:truth ev)
+            occ1 (:occurrence-time ev)
+            eternalize? (= occ1 truth/occurrence-eternal)
+            ;; Single-premise inference (R1 rules)
+            state (reduce
+                    (fn [state derivation]
+                      (let [conclusion-term (rule-table/reduce-conclusion (:term derivation))
+                            conclusion-truth (:truth derivation)]
+                        (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
+                          state
+                          (let [derived-ev (event/make-event
+                                            {:term conclusion-term
+                                             :type event/event-type-belief
+                                             :truth conclusion-truth
+                                             :stamp (:stamp ev)
+                                             :occurrence-time occ1
+                                             :creation-time current-time})
+                                der-priority (* priority
+                                               (truth/truth-expectation conclusion-truth))]
+                            (add-derived-belief state derived-ev der-priority eternalize?)))))
+                    state
+                    (rule-table/apply-rules rules term1 term/empty-term
+                      truth1 truth/default-truth config false))
+            ;; Double-premise inference (R2 rules)
+            related (memory/related-concepts state term1 (:unification-depth config))
+            state (reduce
+                    (fn [state related-concept]
+                      (if-let [{:keys [belief eternalize?]}
+                               (select-belief-for-concept related-concept occ1 config)]
+                        (let [term2 (:term belief)
+                              truth2 (:truth belief)
+                              conclusion-stamp (stamp/stamp-make (:stamp ev) (:stamp belief))
+                              conclusion-occ (if eternalize? truth/occurrence-eternal occ1)]
+                          (if (stamp/stamp-overlap? (:stamp ev) (:stamp belief))
+                            state
+                            (reduce
+                              (fn [state derivation]
+                                (let [conclusion-term (rule-table/reduce-conclusion (:term derivation))
+                                      conclusion-truth (:truth derivation)]
+                                  (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
+                                    state
+                                    (let [derived-ev (event/make-event
+                                                      {:term conclusion-term
+                                                       :type event/event-type-belief
+                                                       :truth conclusion-truth
+                                                       :stamp conclusion-stamp
+                                                       :occurrence-time conclusion-occ
+                                                       :creation-time current-time})
+                                          der-priority (* priority
+                                                         (:priority related-concept 0.5)
+                                                         (truth/truth-expectation conclusion-truth))]
+                                      (add-derived-belief state derived-ev der-priority eternalize?)))))
+                              state
+                              (rule-table/apply-rules rules term1 term2
+                                truth1 truth2 config true))))
+                        state))
+                    state
+                    related)]
+        state))))
 
 ;; -- Event Selection --
 
@@ -52,7 +196,7 @@
     (if concept
       (let [;; Add sequences (without variables) to time index
             ;; Matching ONA: if SEQUENCE && !hasVariable(indep, dep)
-            state (if (and (term/copula? (term/term-root term) term/SEQUENCE)
+            state (if (and (= (term/term-root term) term/sequence*)
                            (not (variable/has-variable? term true true false)))
                     (update state :time-index
                       memory/time-index-add term
@@ -94,7 +238,7 @@
     (if post-concept
       (let [;; Determine operation ID for table selection
             precondition-term (term/extract-subterm (:term imp) 1)
-            op-id (if (and (term/copula? (term/term-root precondition-term) term/SEQUENCE))
+            op-id (if (and (= (term/term-root precondition-term) term/sequence*))
                     (let [op-term (term/extract-subterm precondition-term 2)]
                       (if (narsese/is-operation? op-term)
                         (memory/get-operation-id state op-term)
@@ -152,8 +296,8 @@
   (let [prec-root (term/term-root (:term prec-concept))]
     (if (or (is-op-concept? prec-concept)
             (= (:term prec-concept) (:term op-concept))
-            (term/copula? prec-root term/IMPLICATION)
-            (term/copula? prec-root term/EQUIVALENCE)
+            (= prec-root term/implication)
+            (= prec-root term/equivalence)
             (>= (:creation-time (:belief-spike prec-concept)) current-time)
             (stamp/stamp-overlap? (:stamp (:belief-spike prec-concept))
                                   (:stamp postcondition)))
@@ -202,8 +346,8 @@
           (if (or (not (or both-non-op? both-op?))
                   (= (:occurrence-time prec-ev) post-time)
                   (> (:creation-time prec-ev) current-time)
-                  (term/copula? prec-root term/EQUIVALENCE)
-                  (term/copula? prec-root term/IMPLICATION)
+                  (= prec-root term/equivalence)
+                  (= prec-root term/implication)
                   (stamp/stamp-overlap? (:stamp prec-ev) (:stamp postcondition)))
             state
             (let [seq-event (inference/belief-intersection prec-ev postcondition config)
@@ -249,7 +393,8 @@
       (decision/anticipate state op-id current-time))))
 
 (defn- process-belief-events
-  "Process selected belief events: activate concepts, mine temporal correlations."
+  "Process selected belief events: activate concepts, mine temporal correlations,
+   and run declarative NAL 1-5 inference."
   [state]
   (let [current-time (:current-time state)]
     (reduce
@@ -260,7 +405,8 @@
             (-> state
                 (activate-sensorimotor-concept ev current-time)
                 (mine-temporal-correlations selected current-time)
-                (maybe-anticipate ev (:priority selected) current-time)))))
+                (maybe-anticipate ev (:priority selected) current-time)
+                (cycle-inference selected)))))
       state
       (:selected-beliefs state))))
 
@@ -383,12 +529,12 @@
   (let [config (:config state)
         current-time (:current-time state)
         goal-term (:term goal)]
-    (when (term/copula? (term/term-root goal-term) term/SEQUENCE)
+    (when (= (term/term-root goal-term) term/sequence*)
       ;; Extract components right-to-left from left-nested sequence
       ;; (&/ (&/ A B) C) -> [C, B, A] (index 0=rightmost, i=leftmost)
       (let [components
             (loop [cur goal-term, comps []]
-              (if (term/copula? (term/term-root cur) term/SEQUENCE)
+              (if (= (term/term-root cur) term/sequence*)
                 (recur (term/extract-subterm cur 1)
                        (conj comps (term/extract-subterm cur 2)))
                 (conj comps cur)))
@@ -497,10 +643,11 @@
         ;; Decay concept priorities
         (update :concepts
           (fn [concepts]
-            (reduce-kv
-              (fn [m k c] (assoc m k (update c :priority * concept-dur)))
-              {}
-              concepts))))))
+            (persistent!
+              (reduce-kv
+                (fn [m k c] (assoc! m k (update c :priority * concept-dur)))
+                (transient concepts)
+                concepts)))))))
 
 ;; -- Process pending events --
 

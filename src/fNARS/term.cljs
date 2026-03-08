@@ -6,41 +6,37 @@
 (def ^:const compound-term-size-max 64)
 
 ;; Copula keywords - use valid ClojureScript keyword syntax
-(def INHERITANCE :cop-inheritance)
-(def SIMILARITY :cop-similarity)
-(def IMPLICATION :cop-implication)
-(def TEMPORAL-IMPLICATION :cop-temporal-implication)
-(def EQUIVALENCE :cop-equivalence)
-(def CONJUNCTION :cop-conjunction)
-(def SEQUENCE :cop-sequence)
-(def NEGATION :cop-negation)
-(def PRODUCT :cop-product)
-(def EXT-SET :cop-ext-set)
-(def INT-SET :cop-int-set)
-(def SET-TERMINATOR :cop-set-terminator)
-(def DISJUNCTION :cop-disjunction)
-(def EXT-IMAGE1 :cop-ext-image1)
-(def EXT-IMAGE2 :cop-ext-image2)
-(def INT-IMAGE1 :cop-int-image1)
-(def INT-IMAGE2 :cop-int-image2)
-(def HAS-CONTINUOUS-PROPERTY :cop-has-continuous-property)
-(def EXT-DIFFERENCE :cop-ext-difference)
-(def INT-DIFFERENCE :cop-int-difference)
-(def EXT-INTERSECTION :cop-ext-intersection)
-(def INT-INTERSECTION :cop-int-intersection)
+(def inheritance :cop-inheritance)
+(def similarity :cop-similarity)
+(def implication :cop-implication)
+(def temporal-implication :cop-temporal-implication)
+(def equivalence :cop-equivalence)
+(def conjunction :cop-conjunction)
+(def sequence* :cop-sequence)
+(def negation :cop-negation)
+(def product :cop-product)
+(def ext-set :cop-ext-set)
+(def int-set :cop-int-set)
+(def set-terminator :cop-set-terminator)
+(def disjunction :cop-disjunction)
+(def ext-image1 :cop-ext-image1)
+(def ext-image2 :cop-ext-image2)
+(def int-image1 :cop-int-image1)
+(def int-image2 :cop-int-image2)
+(def set-element :cop-set-element)
+(def has-continuous-property :cop-has-continuous-property)
+(def ext-difference :cop-ext-difference)
+(def int-difference :cop-int-difference)
+(def ext-intersection :cop-ext-intersection)
+(def int-intersection :cop-int-intersection)
 
 (def copula-set
   "Set of all copula keywords."
-  #{INHERITANCE SIMILARITY IMPLICATION TEMPORAL-IMPLICATION EQUIVALENCE
-    CONJUNCTION SEQUENCE NEGATION PRODUCT EXT-SET INT-SET SET-TERMINATOR
-    DISJUNCTION EXT-IMAGE1 EXT-IMAGE2 INT-IMAGE1 INT-IMAGE2
-    HAS-CONTINUOUS-PROPERTY EXT-DIFFERENCE INT-DIFFERENCE
-    EXT-INTERSECTION INT-INTERSECTION})
-
-(defn copula?
-  "Check if an atom is a specific copula."
-  [atom copula]
-  (= atom copula))
+  #{inheritance similarity implication temporal-implication equivalence
+    conjunction sequence* negation product ext-set int-set set-terminator
+    set-element disjunction ext-image1 ext-image2 int-image1 int-image2
+    has-continuous-property ext-difference int-difference
+    ext-intersection int-intersection})
 
 (defn is-copula?
   "Check if an atom is any copula."
@@ -111,10 +107,9 @@
   [term]
   (count (filter some? term)))
 
-(defn term-equal
+(def term-equal
   "Check if two terms are equal."
-  [a b]
-  (= a b))
+  =)
 
 (defn has-atom
   "Check if term contains a specific atom anywhere."

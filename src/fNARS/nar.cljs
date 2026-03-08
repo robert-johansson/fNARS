@@ -14,7 +14,8 @@
             [fNARS.priority-queue :as pq]
             [fNARS.table :as table]
             [fNARS.cycle :as cycle]
-            [fNARS.nar-config :as nar-config]))
+            [fNARS.nar-config :as nar-config]
+            [fNARS.rule-table :as rule-table]))
 
 (defn nar-init
   "Create a fresh NAR state with the given config (or defaults)."
@@ -32,6 +33,7 @@
     :cycling-goal-events {}
     :operations {}
     :rng-state [0 42]
+    :nal-rules (rule-table/rules-for-level (:semantic-inference-nal-level config))
     :output []}))
 
 (defn nar-add-operation
@@ -252,8 +254,8 @@
   [state term tense]
   (let [config (:config state)
         current-time (:current-time state)
-        is-implication? (term/copula? (term/term-root term) term/TEMPORAL-IMPLICATION)
-        is-non-temporal-imp? (term/copula? (term/term-root term) term/IMPLICATION)
+        is-implication? (= (term/term-root term) term/temporal-implication)
+        is-non-temporal-imp? (= (term/term-root term) term/implication)
         is-any-imp? (or is-implication? is-non-temporal-imp?)
         to-compare (if is-implication? (term/extract-subterm term 2) term)
         [state _] (memory/conceptualize state term current-time)

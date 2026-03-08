@@ -117,8 +117,9 @@ server.tool(
 );
 
 server.tool("reset", "Reset ONA to initial state", {}, async () => {
-  const result = await sendToNAR("*reset");
-  return { content: [{ type: "text", text: result || "Reset complete" }] };
+  startNAR(); // Kill and respawn the NAR process (picks up rebuilt binary)
+  await new Promise((r) => setTimeout(r, 200)); // Wait for process to start
+  return { content: [{ type: "text", text: "Reset complete (process restarted)" }] };
 });
 
 server.tool(

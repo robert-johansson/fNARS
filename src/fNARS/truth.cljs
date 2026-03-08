@@ -133,6 +133,87 @@
   {:frequency 1.0
    :confidence (w2c (* (:frequency v) (:confidence v)) horizon)})
 
+;; --- NAL 1-5 truth functions (uniform 2-arity for rule table) ---
+
+(defn truth-structural-intersection
+  "StructuralIntersection: Intersection(v1, STRUCTURAL_TRUTH).
+   ONA: Truth_StructuralIntersection(v1, v2) = Truth_Intersection(v1, STRUCTURAL_TRUTH)."
+  [v config]
+  (truth-intersection v {:frequency 1.0 :confidence (:reliance config)}))
+
+(defn truth-structural-deduction-negated
+  "StructuralDeductionNegated: Negation(Deduction(v1, STRUCTURAL_TRUTH)).
+   ONA: Truth_Negation(Truth_Deduction(v1, STRUCTURAL_TRUTH), v2)."
+  [v config]
+  (truth-negation (truth-structural-deduction v config)))
+
+(defn truth-union
+  "Union: f = or(f1,f2), c = c1*c2"
+  [v1 v2]
+  (let [f1 (:frequency v1) f2 (:frequency v2)]
+    {:frequency (- 1.0 (* (- 1.0 f1) (- 1.0 f2)))
+     :confidence (* (:confidence v1) (:confidence v2))}))
+
+(defn truth-difference
+  "Difference: f = f1*(1-f2), c = c1*c2"
+  [v1 v2]
+  {:frequency (* (:frequency v1) (- 1.0 (:frequency v2)))
+   :confidence (* (:confidence v1) (:confidence v2))})
+
+(defn truth-decompose-pnn
+  "DecomposePNN: fn = f1*(1-f2), result = {1-fn, fn*c1*c2}"
+  [v1 v2]
+  (let [fn' (* (:frequency v1) (- 1.0 (:frequency v2)))]
+    {:frequency (- 1.0 fn')
+     :confidence (* fn' (:confidence v1) (:confidence v2))}))
+
+(defn truth-decompose-npp
+  "DecomposeNPP: f = (1-f1)*f2, result = {f, f*c1*c2}"
+  [v1 v2]
+  (let [f (* (- 1.0 (:frequency v1)) (:frequency v2))]
+    {:frequency f
+     :confidence (* f (:confidence v1) (:confidence v2))}))
+
+(defn truth-decompose-pnp
+  "DecomposePNP: f = f1*(1-f2), result = {f, f*c1*c2}"
+  [v1 v2]
+  (let [f (* (:frequency v1) (- 1.0 (:frequency v2)))]
+    {:frequency f
+     :confidence (* f (:confidence v1) (:confidence v2))}))
+
+(defn truth-decompose-ppp
+  "DecomposePPP: DecomposeNPP(Negation(v1), v2)"
+  [v1 v2]
+  (truth-decompose-npp (truth-negation v1) v2))
+
+(defn truth-decompose-nnn
+  "DecomposeNNN: fn = (1-f1)*(1-f2), result = {1-fn, fn*c1*c2}"
+  [v1 v2]
+  (let [fn' (* (- 1.0 (:frequency v1)) (- 1.0 (:frequency v2)))]
+    {:frequency (- 1.0 fn')
+     :confidence (* fn' (:confidence v1) (:confidence v2))}))
+
+(defn truth-anonymous-analogy
+  "AnonymousAnalogy: Analogy(v1, {1.0, w2c(f2*c2)}).
+   Page 125 in NAL book."
+  [v1 v2 horizon]
+  (let [v3 {:frequency 1.0 :confidence (w2c (* (:frequency v2) (:confidence v2)) horizon)}]
+    (truth-analogy v1 v3)))
+
+(defn truth-frequency-greater
+  "FrequencyGreater: if f1>f2 then {1.0, c1*c2} else {0.0, 0.0}"
+  [v1 v2]
+  (let [condition (> (:frequency v1) (:frequency v2))]
+    {:frequency (if condition 1.0 0.0)
+     :confidence (if condition (* (:confidence v1) (:confidence v2)) 0.0)}))
+
+(defn truth-frequency-equal
+  "FrequencyEqual: if f1==f2 then {1.0, c1*c2} else {0.0, 0.0}"
+  [v1 v2]
+  (let [condition (== (:frequency v1) (:frequency v2))]
+    {:frequency (if condition 1.0 0.0)
+     :confidence (if condition (* (:confidence v1) (:confidence v2)) 0.0)}))
+
 (defn truth-equal
   "Check if two truth values are equal."
   [v1 v2]
