@@ -1,18 +1,28 @@
 # fNARS
 
+> **Constraint:** Never read, write, or execute anything outside /Users/robert/claude/fNARS
+
 Functional ClojureScript port of the sensorimotor subset of OpenNARS for Applications (ONA).
 
 ## Quick Start
 
 ```bash
-# Run tests
-bunx --bun nbb -cp src:lib/instaparse/src:test -m fNARS.test-runner
+# Run all tests (nbb + JVM + ch6 + ch7 + NAL)
+bb test:all
 
-# Run Chapter 6 operant conditioning tests
-bunx --bun nbb -cp src:lib/instaparse/src:test test/fNARS/ch6_test.cljs
+# Run tests on a single platform
+bb test:nbb        # nbb/bun
+bb test:jvm        # JVM Clojure
 
 # Run interactive shell
-bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.core
+bb repl             # nbb
+bb repl:jvm         # JVM
+
+# Run MPRF experiments
+bb mprf op1
+
+# Run .nal files
+bb nal OpenNARS-for-Applications/examples/nal/asthma2.nal
 ```
 
 ## Runtime

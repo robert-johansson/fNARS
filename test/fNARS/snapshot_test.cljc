@@ -3,7 +3,10 @@
    Each test runs a deterministic scenario and checks detailed internal state:
    implication tables, truth values, decisions, PRNG state.
    These tests guard against behavioral regressions during refactoring."
-  (:require [cljs.test :refer [deftest testing is are]]
+  (:require #?(:cljs [cljs.test :refer [deftest testing is are]]
+               :clj  [clojure.test :refer [deftest testing is are]])
+            [fNARS.platform :as p]
+            [clojure.string :as str]
             [fNARS.nar :as nar]
             [fNARS.term :as term]
             [fNARS.event :as event]
@@ -24,7 +27,7 @@
 ;; ============================================================
 
 (defn approx= [a b & [eps]]
-  (< (js/Math.abs (- a b)) (or eps 0.01)))
+  (< (p/abs (- a b)) (or eps 0.01)))
 
 (defn feed
   "Feed lines through the shell, return final state."
@@ -79,6 +82,13 @@
           :when (every? #(term/has-atom (:term imp) %) required-atoms)]
       imp)))
 
+(defn op-id-for
+  "Look up operation ID by name string (e.g. \"^pick\")."
+  [state op-name]
+  (let [op-atom (keyword op-name)]
+    (first (keep (fn [[k v]] (when (= (:atom v) op-atom) k))
+                 (:operations state)))))
+
 (defn count-implications
   "Count implications on postcondition-term for op-id."
   [state postcondition-term op-id]
@@ -92,16 +102,17 @@
   "Check if outputs contain an execution of op-name."
   [outputs op-name]
   (some #(and (string? %)
-              (or (.includes % (str op-name " executed"))
-                  (.includes % (str "EXE: " op-name))))
+              (or (str/includes? % (str op-name " executed"))
+                  (str/includes? % (str "EXE: " op-name))))
         outputs))
 
 (defn get-execution
   "Get the executed operation name from outputs, or nil."
   [outputs]
   (some (fn [s]
-          (when (and (string? s) (.includes s "EXE: "))
-            (second (.split (.substring s (.indexOf s "EXE: ")) " "))))
+          (when (and (string? s) (str/includes? s "EXE: "))
+            (let [idx (str/index-of s "EXE: ")]
+              (second (str/split (subs s idx) #" ")))))
         outputs))
 
 (defn concept-belief-spike-truth
@@ -230,8 +241,8 @@
 
     ;; Check both ops have implications
     (testing "implications per op"
-      (is (pos? (count-implications state self-good 1)) "^pick implications")
-      (is (pos? (count-implications state self-good 2)) "^go implications"))
+      (is (pos? (count-implications state self-good (op-id-for state "^pick"))) "^pick implications")
+      (is (pos? (count-implications state self-good (op-id-for state "^go"))) "^go implications"))
 
     ;; See duck -> ^pick
     (let [{:keys [outputs]}
@@ -366,7 +377,8 @@
 (deftest test-snapshot-pong-deterministic
   (let [nar (-> (nar/nar-init)
                 (nar/nar-add-operation "^left" (fn [s _] s))
-                (nar/nar-add-operation "^right" (fn [s _] s)))
+                (nar/nar-add-operation "^right" (fn [s _] s))
+                (assoc-in [:config :babbling-ops] 2))
         ;; Run 20 pong ticks manually (simplified inline version)
         ;; We just test PRNG + belief/goal processing determinism
         game {:ballX 25 :ballY 4 :batX 20 :batVX 0 :vX 1 :vY 1
@@ -386,7 +398,7 @@
                      ballX (+ ballX vX) ballY (+ ballY vY)
                      [hits misses nar]
                      (if (== ballY 0)
-                       (if (<= (js/Math.abs (- ballX batX)) bat-width)
+                       (if (<= (p/abs (- ballX batX)) bat-width)
                          [(inc hits) misses
                           (nar/nar-add-input-belief nar (term/atomic-term :good_nar))]
                          [hits (inc misses) nar])

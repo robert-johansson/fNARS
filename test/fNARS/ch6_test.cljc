@@ -8,7 +8,8 @@
             [fNARS.truth :as truth]
             [fNARS.narsese :as narsese]
             [fNARS.parser :as parser]
-            [fNARS.shell :as shell]))
+            [fNARS.shell :as shell]
+            [clojure.string :as str]))
 
 ;; ============================================================
 ;; Helper: feed Narsese lines through the shell, collect output
@@ -29,16 +30,16 @@
   "Check if any output line contains an operation execution."
   [outputs op-name]
   (some #(and (string? %)
-              (or (.includes % (str op-name " executed"))
-                  (.includes % (str "EXE: " op-name))))
+              (or (str/includes? % (str op-name " executed"))
+                  (str/includes? % (str "EXE: " op-name))))
         outputs))
 
 (defn count-executions
   "Count how many outputs contain an execution of the given operation."
   [outputs op-name]
   (count (filter #(and (string? %)
-                       (or (.includes % (str op-name " executed"))
-                           (.includes % (str "EXE: " op-name))))
+                       (or (str/includes? % (str op-name " executed"))
+                           (str/includes? % (str "EXE: " op-name))))
                  outputs)))
 
 ;; ============================================================

@@ -1,0 +1,8 @@
+{:paths ["src" "lib/instaparse/src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :exec-fn fNARS.test-runner/-main}
+  :run  {:exec-fn fNARS.core/-main}
+  :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.6"}}
+          :ns-default build}}}

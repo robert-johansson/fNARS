@@ -6,7 +6,8 @@
             [fNARS.event :as event]
             [fNARS.truth :as truth]
             [fNARS.parser :as parser]
-            [fNARS.variable :as variable]))
+            [fNARS.variable :as variable]
+            [fNARS.platform :as p]))
 
 ;; -- Helpers --
 
@@ -21,7 +22,7 @@
   [state narsese-str]
   (let [parsed (parser/parse-narsese narsese-str)]
     (when-not parsed
-      (throw (js/Error. (str "Failed to parse: " narsese-str))))
+      (throw (ex-info (str "Failed to parse: " narsese-str) {})))
     (nar/nar-add-input state (:term parsed) event/event-type-belief
       (or (:truth parsed) truth/default-truth)
       {:eternal? (= (:tense parsed) :eternal)})))
@@ -55,7 +56,7 @@
 (defn approx=
   "Check if two numbers are approximately equal."
   [a b & [tolerance]]
-  (< (js/Math.abs (- a b)) (or tolerance 0.01)))
+  (< (p/abs (- a b)) (or tolerance 0.01)))
 
 (defn check-answer
   "Check that answering question-str gives expected frequency and confidence."

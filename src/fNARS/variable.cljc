@@ -3,7 +3,16 @@
    Variable atoms: :$1-:$9 (independent), :#1-:#9 (dependent), :?1-:?9 (query).
    Unification, substitution, variable introduction, and normalization."
   (:require [fNARS.term :as term]
-            [fNARS.truth :as truth]))
+            [fNARS.truth :as truth]
+            [fNARS.platform :as p]))
+
+(defn- digit-1-9?
+  "Check if character is a digit 1-9."
+  [c]
+  #?(:clj  (and (>= (int c) (int \1))
+                (<= (int c) (int \9)))
+     :cljs (let [code (.charCodeAt (str c) 0)]
+             (and (>= code 49) (<= code 57)))))
 
 (defn independent-var?
   "Check if atom is an independent variable ($1-$9)."
@@ -12,8 +21,7 @@
        (let [n (name atom)]
          (and (== (count n) 2)
               (= (first n) \$)
-              (>= (second n) \1)
-              (<= (second n) \9)))))
+              (digit-1-9? (second n))))))
 
 (defn dependent-var?
   "Check if atom is a dependent variable (#1-#9)."
@@ -22,8 +30,7 @@
        (let [n (name atom)]
          (and (== (count n) 2)
               (= (first n) \#)
-              (>= (second n) \1)
-              (<= (second n) \9)))))
+              (digit-1-9? (second n))))))
 
 (defn query-var?
   "Check if atom is a query variable (?1-?9)."
@@ -32,8 +39,7 @@
        (let [n (name atom)]
          (and (== (count n) 2)
               (= (first n) \?)
-              (>= (second n) \1)
-              (<= (second n) \9)))))
+              (digit-1-9? (second n))))))
 
 (defn variable?
   "Check if atom is any kind of variable."
@@ -153,7 +159,7 @@
                              (= (:measurement g-info) (:measurement s-info)))
                       (let [v1 (:value g-info)
                             v2 (:value s-info)
-                            sim-conf (max 0.0 (- 1.0 (/ (js/Math.abs (- v1 v2))
+                            sim-conf (max 0.0 (- 1.0 (/ (p/abs (- v1 v2))
                                                          similarity-distance)))
                             new-tv (truth/truth-analogy tv {:frequency 1.0
                                                             :confidence sim-conf})]

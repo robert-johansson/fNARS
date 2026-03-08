@@ -1,0 +1,77 @@
+{:paths ["src" "lib/instaparse/src"]
+ :tasks
+ {test:nbb  {:doc  "Run tests on nbb/bun"
+             :task (shell "bunx --bun nbb -cp src:lib/instaparse/src:test -m fNARS.test-runner")}
+
+  test:jvm  {:doc  "Run tests on JVM Clojure"
+             :task (shell "clj -M:test -m fNARS.test-runner")}
+
+  test:ch6  {:doc  "Run Chapter 6 operant conditioning tests"
+             :task (shell "bunx --bun nbb -cp src:lib/instaparse/src:test test/fNARS/ch6_test.cljc")}
+
+  test:ch7  {:doc  "Run Chapter 7 identity matching test"
+             :task (shell "bunx --bun nbb -cp src:lib/instaparse/src:test test/fNARS/ch7_test.cljc")}
+
+  test:nal  {:doc  "Run NAL comparison tests"
+             :task (shell "bunx --bun nbb -cp src:lib/instaparse/src:test test/fNARS/nal_comparison_test.cljc")}
+
+  test:bb   {:doc  "Run tests on babashka"
+             :task (shell "bb -cp src:lib/instaparse/src:test -m fNARS.test-runner")}
+
+  test:all  {:doc  "Run all tests on all available platforms"
+             :task (do (run 'test:nbb)
+                       (run 'test:jvm)
+                       (run 'test:bb)
+                       (run 'test:shadow)
+                       (run 'test:browser)
+                       (run 'test:ch6)
+                       (run 'test:ch7)
+                       (run 'test:nal))}
+
+  repl      {:doc  "Start interactive fNARS shell (nbb)"
+             :override-builtin true
+             :task (shell "bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.core")}
+
+  repl:jvm  {:doc  "Start interactive fNARS shell (JVM)"
+             :task (shell "clj -M -m fNARS.core")}
+
+  mprf      {:doc  "Run MPRF experiment (default: op1)"
+             :task (let [exp (or (first *command-line-args*) "op1")]
+                     (shell "bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.mprf" exp))}
+
+  nal       {:doc  "Run a .nal file through fNARS"
+             :task (let [file (first *command-line-args*)]
+                     (if file
+                       (shell "bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.nal-runner" file)
+                       (println "Usage: bb nal <file.nal>")))}
+
+  build:shadow {:doc  "Build shadow-cljs production bundle (target/fnars.js)"
+                :task (shell "npx shadow-cljs release fnars")}
+
+  build:browser {:doc  "Build browser bundle (public/js/fnars-browser.js)"
+                 :task (shell "npx shadow-cljs release browser")}
+
+  test:shadow  {:doc  "Run tests via shadow-cljs compiled JS"
+                :task (do (shell "npx shadow-cljs release test")
+                          (shell "node target/test.js"))}
+
+  test:browser {:doc  "Run browser smoke tests (Playwright)"
+                :depends [build:browser]
+                :task (shell "node test/browser_smoke_test.mjs")}
+
+  build:uber  {:doc  "Build uberjar (target/fnars.jar)"
+               :task (shell "clj -T:build uber")}
+
+  build:native {:doc  "Build GraalVM native binary (target/fnars)"
+                :depends [build:uber]
+                :task (shell "native-image" "-jar" "target/fnars.jar"
+                             "-o" "target/fnars"
+                             "--no-fallback"
+                             "--initialize-at-build-time"
+                             "-march=native"
+                             "-J-Xmx4g")}
+
+  build       {:doc  "Build all artifacts"
+               :task (do (run 'build:shadow)
+                         (run 'build:browser)
+                         (run 'build:native))}}}

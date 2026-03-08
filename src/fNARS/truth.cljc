@@ -1,6 +1,7 @@
 (ns fNARS.truth
   "Truth value functions matching C ONA's Truth.c exactly.
-   Uses TRUTH_EVIDENTIAL_HORIZON = 1.0 and clamping semantics.")
+   Uses TRUTH_EVIDENTIAL_HORIZON = 1.0 and clamping semantics."
+  (:require [fNARS.platform :as p]))
 
 (def ^:const occurrence-eternal -1)
 
@@ -81,7 +82,7 @@
     v
     {:frequency (:frequency v)
      :confidence (* (:confidence v)
-                    (js/Math.pow decay (js/Math.abs (- target-time original-time))))}))
+                    (p/pow decay (p/abs (- target-time original-time))))}))
 
 (defn truth-negation
   "Negation: f = 1-f, c = c"

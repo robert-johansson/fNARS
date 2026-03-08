@@ -10,8 +10,8 @@
             [fNARS.shell :as shell]
             [fNARS.variable :as variable]
             [fNARS.term :as term]
-            [clojure.string :as str]
-            ["fs" :as fs]))
+            [fNARS.platform :as p]
+            [clojure.string :as str]))
 
 ;; -- Line classification --
 
@@ -54,8 +54,8 @@
                     conf-match (re-find #"confidence=([0-9.]+)" truth-part)]
                 {:type :answer
                  :term-str (str/trim term-part)
-                 :truth {:frequency (js/parseFloat (second freq-match))
-                         :confidence (js/parseFloat (second conf-match))}})))
+                 :truth {:frequency (p/parse-float (second freq-match))
+                         :confidence (p/parse-float (second conf-match))}})))
 
           ;; ^op executed with args
           (str/includes? text "executed with args")
@@ -87,7 +87,7 @@
       (nar/nar-init (:config state))
 
       (str/starts-with? trimmed "*anticipationconfidence=")
-      (let [val (js/parseFloat (subs trimmed (count "*anticipationconfidence=")))]
+      (let [val (p/parse-float (subs trimmed (count "*anticipationconfidence=")))]
         (update state :config assoc :anticipation-confidence val))
 
       :else state)))
@@ -95,7 +95,7 @@
 ;; -- Answer checking --
 
 (defn- approx= [a b tolerance]
-  (< (js/Math.abs (- a b)) tolerance))
+  (< (p/abs (- a b)) tolerance))
 
 (defn- check-answer [state expected tolerance]
   "Check if the NAR can answer a question matching the expected result."
@@ -135,7 +135,7 @@
 
 (defn run-nal-file [filepath & [{:keys [tolerance verbose nal-level]
                                   :or {tolerance 0.05 verbose false nal-level 6}}]]
-  (let [content (str (.readFileSync fs filepath "utf8"))
+  (let [content (p/slurp-file filepath)
         lines (str/split-lines content)
         config (assoc nar-config/default-config
                  :semantic-inference-nal-level nal-level
@@ -192,7 +192,7 @@
 
             ;; Cycle count
             (cycle-count? line)
-            (let [n (js/parseInt trimmed)]
+            (let [n (p/parse-int trimmed)]
               (when verbose (println (str "  [" n " cycles]")))
               (recur (nar/nar-cycles state n) rest-lines results pending-expected))
 
@@ -240,5 +240,5 @@
           verbose (some #(= % "--verbose") args)
           tol-idx (some (fn [i] (when (= (nth args i) "--tolerance") (inc i)))
                         (range (count args)))
-          tolerance (if tol-idx (js/parseFloat (nth args tol-idx)) 0.05)]
+          tolerance (if tol-idx (p/parse-float (nth args tol-idx)) 0.05)]
       (run-nal-file filepath {:verbose verbose :tolerance tolerance}))))

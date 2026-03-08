@@ -7,12 +7,13 @@
             [fNARS.term :as term]
             [fNARS.event :as event]
             [fNARS.concept :as concept]
+            [fNARS.platform :as p]
             [clojure.string :as str]))
 
 (defn- format-truth
   "Format a truth value for display."
   [{:keys [frequency confidence]}]
-  (str "{" (.toFixed frequency 6) " " (.toFixed confidence 6) "}"))
+  (str "{" (p/format-decimal frequency 6) " " (p/format-decimal confidence 6) "}"))
 
 (defn format-term
   "Format a term for display (simplified Narsese output)."
@@ -113,10 +114,10 @@
          (str/join "\n"
            (map (fn [[k c]]
                   (str "  " (format-term k)
-                       " priority=" (.toFixed (concept/effective-priority c
+                       " priority=" (p/format-decimal (concept/effective-priority c
                                                (:decay-epoch state 0)
                                                (:concept-durability (:config state) 0.9)) 4)
-                       " usefulness=" (.toFixed (concept/usage-usefulness (:usage c) (:current-time state)) 4)
+                       " usefulness=" (p/format-decimal (concept/usage-usefulness (:usage c) (:current-time state)) 4)
                        (when-not (event/event-deleted? (:belief c))
                          (str " belief=" (format-truth (:truth (:belief c)))))
                        (when-not (event/event-deleted? (:belief-spike c))
@@ -137,7 +138,7 @@
 
       ;; Numeric: run N cycles
       (re-matches #"\d+" line)
-      (let [n (js/parseInt line)
+      (let [n (p/parse-int line)
             state (nar/nar-cycles state n)
             {:keys [output state]} (nar/nar-get-output state)]
         {:state state
@@ -153,23 +154,23 @@
        :output (concepts-report state)}
 
       (str/starts-with? line "*volume=")
-      (let [vol (js/parseInt (subs line 8))]
+      (let [vol (p/parse-int (subs line 8))]
         {:state (assoc-in state [:config :volume] vol)
          :output (str "Volume set to " vol)})
 
       (str/starts-with? line "*motorbabbling=")
-      (let [val (js/parseFloat (subs line 15))]
+      (let [val (p/parse-float (subs line 15))]
         {:state (assoc-in state [:config :motor-babbling-chance] val)
          :output (str "Motor babbling chance set to " val)})
 
       (str/starts-with? line "*decisionthreshold=")
-      (let [val (js/parseFloat (subs line 19))]
+      (let [val (p/parse-float (subs line 19))]
         {:state (assoc-in state [:config :decision-threshold] val)
          :output (str "Decision threshold set to " val)})
 
       (str/starts-with? line "*setopname ")
       (let [parts (str/split (str/trim line) #"\s+")
-            op-idx (js/parseInt (nth parts 1))
+            op-idx (p/parse-int (nth parts 1))
             op-name (nth parts 2)]
         {:state (assoc-in state [:operations op-idx]
                   {:name op-name
@@ -180,8 +181,8 @@
 
       (str/starts-with? line "*setoparg ")
       (let [parts (str/split (str/trim line) #"\s+" 4)
-            op-idx (js/parseInt (nth parts 1))
-            arg-idx (js/parseInt (nth parts 2))
+            op-idx (p/parse-int (nth parts 1))
+            arg-idx (p/parse-int (nth parts 2))
             arg-str (str/trim (nth parts 3))
             arg-term (if (str/starts-with? arg-str "(")
                        (:term (parser/parse-narsese (str arg-str ". :|:")))
@@ -195,7 +196,7 @@
          :output (str "Set operation " op-idx " arg " arg-idx " to " arg-str)})
 
       (str/starts-with? line "*babblingops=")
-      (let [val (js/parseInt (subs line 13))]
+      (let [val (p/parse-int (subs line 13))]
         {:state (assoc-in state [:config :babbling-ops] val)
          :output (str "Babbling ops set to " val)})
 
@@ -208,8 +209,8 @@
         (let [{:keys [term type truth tense occurrence-time-offset]} parsed
               state (case type
                       :belief (nar/nar-add-input state term event/event-type-belief truth
-                                [{:eternal? (= tense :eternal)
-                                  :occurrence-time-offset occurrence-time-offset}])
+                                {:eternal? (= tense :eternal)
+                                 :occurrence-time-offset occurrence-time-offset})
                       :goal   (nar/nar-add-input state term event/event-type-goal truth)
                       :question state
                       state)

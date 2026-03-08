@@ -11,7 +11,8 @@
             [fNARS.memory :as memory]
             [fNARS.concept :as concept]
             [fNARS.table :as table]
-            [fNARS.implication :as implication]))
+            [fNARS.implication :as implication]
+            [fNARS.platform :as p]))
 
 (defn- better-decision?
   "Check if decision a is better than decision b.
@@ -39,11 +40,11 @@
         ;; Multiply + add 12345, with carries through 16-bit digits (mod 2^64)
         t0 (+ (* s0 m0) 12345)
         r0 (bit-and t0 0xFFFF)
-        t1 (+ (* s0 m1) (* s1 m0) (js/Math.trunc (/ t0 65536)))
+        t1 (+ (* s0 m1) (* s1 m0) (p/trunc (/ t0 65536)))
         r1 (bit-and t1 0xFFFF)
-        t2 (+ (* s1 m1) (* s2 m0) (js/Math.trunc (/ t1 65536)))
+        t2 (+ (* s1 m1) (* s2 m0) (p/trunc (/ t1 65536)))
         r2 (bit-and t2 0xFFFF)
-        t3 (+ (* s2 m1) (* s3 m0) (js/Math.trunc (/ t2 65536)))
+        t3 (+ (* s2 m1) (* s3 m0) (p/trunc (/ t2 65536)))
         r3 (bit-and t3 0xFFFF)
         ;; Assemble 32-bit halves
         new-lo (+ r0 (* r1 65536))
@@ -370,7 +371,7 @@
         t-new {:frequency 0.0 :confidence (:anticipation-confidence config)}
         ;; TPast = Truth_Projection(precondition.truth, 0, imp.occurrenceTimeOffset)
         t-past (truth/truth-projection (:truth precondition-event) 0
-                                       (js/Math.round (:occurrence-time-offset imp))
+                                       (p/round (:occurrence-time-offset imp))
                                        (:projection-decay config))
         ;; neg-truth = Truth_Eternalize(Truth_Induction(TNew, TPast))
         neg-truth (truth/truth-eternalize

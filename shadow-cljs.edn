@@ -1,0 +1,24 @@
+{:source-paths ["src" "lib/instaparse/src" "test"]
+
+ :dependencies []
+
+ :builds
+ {:fnars
+  {:target :node-script
+   :main fNARS.core/-main
+   :output-to "target/fnars.js"
+   :compiler-options {:optimizations :advanced}}
+
+  :browser
+  {:target :browser
+   :modules {:fnars-browser {:init-fn fNARS.browser/init}}
+   :output-dir "public/js"
+   :asset-path "js"
+   :compiler-options {:optimizations :advanced}}
+
+  :test
+  {:target :node-test
+   :output-to "target/test.js"
+   :ns-regexp "fNARS\\.(nar|snapshot)-test$"
+   :compiler-options {:optimizations :simple}
+   :devtools {:enabled false}}}}

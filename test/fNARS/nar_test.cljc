@@ -2,7 +2,9 @@
   "Tests for the fNARS sensorimotor system.
    Tests truth functions, terms, stamps, inference, variables,
    the NAR API, parser, and shell."
-  (:require [cljs.test :refer [deftest testing is are]]
+  (:require #?(:cljs [cljs.test :refer [deftest testing is are]]
+               :clj  [clojure.test :refer [deftest testing is are]])
+            [fNARS.platform :as p]
             [fNARS.truth :as truth]
             [fNARS.term :as term]
             [fNARS.stamp :as stamp]
@@ -21,7 +23,7 @@
 
 ;; Helpers
 (defn approx= [a b & [eps]]
-  (< (js/Math.abs (- a b)) (or eps 0.001)))
+  (< (p/abs (- a b)) (or eps 0.001)))
 
 ;; === Truth Value Tests ===
 
@@ -74,7 +76,7 @@
   (let [v {:frequency 1.0 :confidence 0.9}
         result (truth/truth-projection v 10 15 0.8)]
     (is (approx= (:frequency result) 1.0))
-    (is (approx= (:confidence result) (* 0.9 (js/Math.pow 0.8 5))))))
+    (is (approx= (:confidence result) (* 0.9 (p/pow 0.8 5))))))
 
 (deftest test-truth-goal-deduction
   (let [result (truth/truth-goal-deduction {:frequency 1.0 :confidence 0.9}
@@ -325,8 +327,9 @@
 
 (deftest test-nar-add-operation
   (let [state (nar/nar-init)
-        state (nar/nar-add-operation state "^pick" (fn [s _] s))]
-    (is (= (count (:operations state)) 1))))
+        n-default (count (:operations state))
+        state (nar/nar-add-operation state "^custom" (fn [s _] s))]
+    (is (= (count (:operations state)) (inc n-default)))))
 
 (deftest test-nar-cycles
   (let [state (nar/nar-init)

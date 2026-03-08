@@ -19,7 +19,7 @@
   [table implication]
   (let [{:keys [items max-size]} table
         imp-exp (truth/truth-expectation (:truth implication))
-        n-items (cljs.core/count items)]
+        n-items (count items)]
     ;; Find insertion point
     (loop [i 0]
       (if (>= i (min n-items max-size))

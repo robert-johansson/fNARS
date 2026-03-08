@@ -14,32 +14,9 @@
             [fNARS.priority-queue :as pq]
             [fNARS.table :as table]
             [fNARS.cycle :as cycle]
+            [fNARS.implication :as implication]
             [fNARS.nar-config :as nar-config]
             [fNARS.rule-table :as rule-table]))
-
-(defn nar-init
-  "Create a fresh NAR state with the given config (or defaults)."
-  ([] (nar-init nar-config/default-config))
-  ([config]
-   {:current-time 1
-    :stamp-counter 1
-    :next-concept-id 0
-    :decay-epoch 0
-    :concept-priority-threshold 0.0
-    :concepts-matched-total 0
-    :config config
-    :concepts {}
-    :atom-index {}
-    :atom-values {}
-    :time-index {:items [] :current-index 0}
-    :cycling-belief-events (pq/pq-init (:cycling-belief-events-max config))
-    :cycling-goal-events {}
-    :operations {}
-    :rng-state [0 42]
-    :nal-rules (rule-table/rules-for-level (:semantic-inference-nal-level config))
-    :nal-rule-index (rule-table/build-rule-index
-                      (rule-table/rules-for-level (:semantic-inference-nal-level config)))
-    :output []}))
 
 (defn nar-add-operation
   "Register an operation with the NAR.
@@ -57,12 +34,100 @@
                :action action-fn}
         args (assoc :args (vec args))))))
 
+(def default-operations
+  "Default operations matching ONA Shell.c:37-45."
+  ["^left" "^right" "^up" "^down" "^say"
+   "^pick" "^drop" "^go" "^activate" "^deactivate"])
+
+(defn nar-init
+  "Create a fresh NAR state with the given config (or defaults)."
+  ([] (nar-init nar-config/default-config))
+  ([config]
+   (let [nop (fn [s _] s)
+         state {:current-time 1
+                :stamp-counter 1
+                :next-concept-id 0
+                :decay-epoch 0
+                :concept-priority-threshold 0.0
+                :concepts-matched-total 0
+                :config config
+                :concepts {}
+                :atom-index {}
+                :atom-values {}
+                :time-index {:items [] :current-index 0}
+                :cycling-belief-events (pq/pq-init (:cycling-belief-events-max config))
+                :cycling-goal-events {}
+                :operations {}
+                :rng-state [0 42]
+                :nal-rules (rule-table/rules-for-level (:semantic-inference-nal-level config))
+                :nal-rule-index (rule-table/build-rule-index
+                                  (rule-table/rules-for-level (:semantic-inference-nal-level config)))
+                :output []}]
+     (reduce #(nar-add-operation %1 %2 nop) state default-operations))))
+
 (defn nar-register-atom-value
   "Register a numeric value and measurement name for an atom keyword.
    Atoms with the same measurement name can be analogically unified.
    Matches ONA's Narsese_setAtomValue."
   [state atom-kw value measurement-name]
   (assoc-in state [:atom-values atom-kw] {:value value :measurement measurement-name}))
+
+(defn- auto-register-operation
+  "If term is a temporal implication with an operation in the precondition,
+   auto-register that operation (matching ONA's implicit op registration)."
+  [state term]
+  (if-not (= (term/term-root term) term/temporal-implication)
+    state
+    (let [precondition (term/extract-subterm term 1)]
+      (if-not (= (term/term-root precondition) term/sequence*)
+        state
+        (let [op-term (term/extract-subterm precondition 2)]
+          (if-not (narsese/is-operation? op-term)
+            state
+            (let [op-atom (if (= (term/term-root op-term) term/inheritance)
+                            (get op-term 2)  ;; compound op: <(SELF * x) --> ^op>
+                            (term/term-root op-term))  ;; bare ^op
+                  already? (some (fn [[_ v]] (= (:atom v) op-atom)) (:operations state))]
+              (if already?
+                state
+                (nar-add-operation state (name op-atom) (fn [s _] s))))))))))
+
+(defn- store-eternal-implication
+  "Store an eternal temporal implication directly in the postcondition concept's
+   precondition-beliefs table. Matches how ONA treats eternal input implications."
+  [state term tv]
+  (if-not (= (term/term-root term) term/temporal-implication)
+    state
+    (let [config (:config state)
+          current-time (:current-time state)
+          postcondition (term/extract-subterm term 2)
+          precondition (term/extract-subterm term 1)
+          [state post-concept] (memory/conceptualize state postcondition current-time)]
+      (if-not post-concept
+        state
+        (let [op-id (if (= (term/term-root precondition) term/sequence*)
+                      (let [op-term (term/extract-subterm precondition 2)]
+                        (if (narsese/is-operation? op-term)
+                          (memory/get-operation-id state op-term)
+                          0))
+                      0)
+              source-term (narsese/get-precondition-without-op precondition)
+              [state source-concept] (memory/conceptualize state source-term current-time)
+              imp (implication/make-implication
+                    {:term term
+                     :truth tv
+                     :stamp [(:stamp-counter state)]
+                     :occurrence-time-offset 0.0
+                     :source-concept-key (when source-concept (:term source-concept))
+                     :source-concept-id (when source-concept (:id source-concept))
+                     :creation-time current-time})
+              existing-table (get-in post-concept [:precondition-beliefs op-id]
+                                     (table/table-init))
+              {:keys [table]} (table/table-add-and-revise
+                                existing-table imp
+                                #(inference/implication-revision %1 %2 config))]
+          (memory/update-concept state postcondition
+            #(assoc-in % [:precondition-beliefs op-id] table)))))))
 
 (defn- enqueue-event
   "Add event to the appropriate cycling priority queue."
@@ -150,6 +215,8 @@
   [state term type tv & [{:keys [eternal? occurrence-time-offset]
                           :or {eternal? false occurrence-time-offset 0.0}}]]
   (let [current-time (:current-time state)
+        ;; Auto-register operations found in temporal implications
+        state (auto-register-operation state term)
         [ev new-counter] (event/make-input-event term type tv current-time
                                                   (:stamp-counter state)
                                                   {:occurrence-time-offset occurrence-time-offset})
@@ -157,6 +224,10 @@
              (assoc ev :occurrence-time truth/occurrence-eternal)
              ev)
         state (assoc state :stamp-counter new-counter)
+        ;; Store eternal temporal implications directly in precondition-beliefs
+        state (if (and eternal? (= type event/event-type-belief))
+                (store-eternal-implication state term tv)
+                state)
         state (add-event-to-memory state ev 1.0 true false false 0
                 (or eternal? (== (:occurrence-time ev) truth/occurrence-eternal)))]
     ;; Run one cycle

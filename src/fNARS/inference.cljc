@@ -105,9 +105,12 @@
         ;; Weighted average of occurrence time offsets
         w1 (truth/c2w (:confidence (:truth a)) (:horizon config))
         w2 (truth/c2w (:confidence (:truth b)) (:horizon config))
-        offset-avg (/ (+ (* (:occurrence-time-offset a) w1)
-                         (* (:occurrence-time-offset b) w2))
-                      (+ w1 w2))]
+        w-sum (+ w1 w2)
+        offset-avg (if (zero? w-sum)
+                     0.0
+                     (/ (+ (* (:occurrence-time-offset a) w1)
+                           (* (:occurrence-time-offset b) w2))
+                        w-sum))]
     (implication/make-implication
       {:term (:term a)
        :truth final-truth

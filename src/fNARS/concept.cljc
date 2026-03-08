@@ -1,7 +1,8 @@
 (ns fNARS.concept
   "Concept data structure matching ONA's Concept.h."
   (:require [fNARS.event :as event]
-            [fNARS.table :as table]))
+            [fNARS.table :as table]
+            [fNARS.platform :as p]))
 
 (defn make-concept
   "Create a new concept."
@@ -29,7 +30,7 @@
   (let [age (- decay-epoch (:priority-epoch concept 0))]
     (if (zero? age)
       (:priority concept)
-      (* (:priority concept) (js/Math.pow concept-dur age)))))
+      (* (:priority concept) (p/pow concept-dur age)))))
 
 (defn priority-set-max
   "Set concept priority to max of current effective priority and new-val.

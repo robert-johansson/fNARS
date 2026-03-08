@@ -9,7 +9,8 @@
             [fNARS.narsese :as narsese]
             [fNARS.shell :as shell]
             [fNARS.variable :as variable]
-            [fNARS.memory :as memory]))
+            [fNARS.memory :as memory]
+            [clojure.string :as str]))
 
 ;; ============================================================
 ;; Helpers
@@ -25,9 +26,9 @@
 
 (defn get-execution [outputs]
   (some (fn [s]
-          (when (and (string? s) (.includes s "EXE: "))
-            (let [idx (.indexOf s "EXE: ")]
-              (second (.split (.substring s idx) " ")))))
+          (when (and (string? s) (str/includes? s "EXE: "))
+            (let [idx (str/index-of s "EXE: ")]
+              (second (str/split (subs s idx) #" ")))))
         outputs))
 
 ;; ============================================================

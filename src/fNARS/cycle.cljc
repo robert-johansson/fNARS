@@ -14,7 +14,8 @@
             [fNARS.priority-queue :as pq]
             [fNARS.table :as table]
             [fNARS.implication :as implication]
-            [fNARS.rule-table :as rule-table]))
+            [fNARS.rule-table :as rule-table]
+            [fNARS.platform :as p]))
 
 ;; -- Declarative Inference (NAL 1-5) --
 ;; Matches ONA's Cycle_Inference (Cycle.c lines 971-1069).
@@ -79,7 +80,7 @@
         ;; When selected event is eternal, still allow spike (better confidence).
         use-spike? (and spike-ok?
                         (or (= event-occurrence truth/occurrence-eternal)
-                            (< (js/Math.abs (- event-occurrence (:occurrence-time spike)))
+                            (< (p/abs (- event-occurrence (:occurrence-time spike)))
                                (:event-belief-distance config))))
         belief (if use-spike?
                  (if (= event-occurrence truth/occurrence-eternal)
@@ -268,6 +269,9 @@
                                   (let [term2 (:term belief)
                                         truth2 (:truth belief)
                                         conclusion-stamp (stamp/stamp-make (:stamp ev) (:stamp belief))
+                                        ;; Only eternalize when selected event is also eternal
+                                        eternalize? (and eternalize?
+                                                         (= occ1 truth/occurrence-eternal))
                                         conclusion-occ (if eternalize? truth/occurrence-eternal occ1)]
                                     (if (stamp/stamp-overlap? (:stamp ev) (:stamp belief))
                                       state

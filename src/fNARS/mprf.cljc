@@ -9,6 +9,7 @@
             [fNARS.narsese :as narsese]
             [fNARS.parser :as parser]
             [fNARS.shell :as shell]
+            [fNARS.platform :as p]
             [clojure.string :as str]))
 
 ;; ============================================================
@@ -145,7 +146,7 @@
            rng seed]
       (if (<= i 0)
         v
-        (let [new-rng (bit-and (+ (js/Math.imul rng 1103515245) 12345) 0xFFFFFFFF)
+        (let [new-rng (bit-and (+ (p/imul rng 1103515245) 12345) 0xFFFFFFFF)
               j (mod new-rng (inc i))]
           (recur (dec i)
                  (assoc v i (v j) j (v i))
@@ -318,11 +319,11 @@
       (print (pad-right (:phase entry) 14))
       (print (pad-right (:block entry) 6))
       (print (pad-right (str (:correct entry) "/" (:trials entry)) 10))
-      (print (pad-right (.toFixed (double (:accuracy entry)) 3) 10))
+      (print (pad-right (p/format-decimal (double (:accuracy entry)) 3) 10))
       (doseq [h hyp-names]
         (let [v (get (:hypotheses entry) h)]
-          (print (pad-right (.toFixed (double (:avg-c v)) 4) 10))
-          (print (pad-right (.toFixed (double (:avg-f v)) 4) 10))))
+          (print (pad-right (p/format-decimal (double (:avg-c v)) 4) 10))
+          (print (pad-right (p/format-decimal (double (:avg-f v)) 4) 10))))
       (println))
     (println (apply str (repeat 90 "=")))))
 
@@ -340,11 +341,11 @@
                   (str/join ","
                     (concat [(:phase entry)
                              (:block entry)
-                             (.toFixed (double (:accuracy entry)) 4)]
+                             (p/format-decimal (double (:accuracy entry)) 4)]
                             (mapcat (fn [h]
                                       (let [v (get (:hypotheses entry) h)]
-                                        [(.toFixed (double (:avg-c v)) 4)
-                                         (.toFixed (double (:avg-f v)) 4)]))
+                                        [(p/format-decimal (double (:avg-c v)) 4)
+                                         (p/format-decimal (double (:avg-f v)) 4)]))
                                     hyp-names))))
                 log)))))
 

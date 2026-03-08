@@ -4,6 +4,7 @@
   (:require [instaparse.core :as insta]
             [fNARS.term :as term]
             [fNARS.variable :as variable]
+            [fNARS.platform :as p]
             [clojure.string :as str]))
 
 ;; -- Grammar --
@@ -139,7 +140,7 @@
    :pct-truth (fn
                 ([f] [:truth {:frequency f :confidence 0.9}])
                 ([f c] [:truth {:frequency f :confidence c}]))
-   :number (fn [s] (js/parseFloat s))
+   :number (fn [s] (p/parse-float s))
    :statement (fn [left copula right]
                 (-> (term/atomic-term copula)
                     (term/override-subterm 1 left)

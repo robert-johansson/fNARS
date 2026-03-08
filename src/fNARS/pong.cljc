@@ -8,6 +8,7 @@
             [fNARS.shell :as shell]
             [fNARS.stamp :as stamp]
             [fNARS.decision :as decision]
+            [fNARS.platform :as p]
             [clojure.string :as str]))
 
 ;; ============================================================
@@ -26,8 +27,8 @@
         (when (>= (:confidence (:truth imp)) 0.001)
           (println (str "IMP tick=" tick
                         " op=" op-id
-                        " f=" (.toFixed (:frequency (:truth imp)) 6)
-                        " c=" (.toFixed (:confidence (:truth imp)) 6)
+                        " f=" (p/format-decimal (:frequency (:truth imp)) 6)
+                        " c=" (p/format-decimal (:confidence (:truth imp)) 6)
                         " stamp=" (format-stamp (:stamp imp))
                         " term=\"" (shell/format-term (:term imp)) "\"")))))))
 
@@ -83,7 +84,7 @@
         ;; Hit/miss check
         [hits misses score nar]
         (if (== ballY 0)
-          (if (<= (js/Math.abs (- ballX batX)) bat-width)
+          (if (<= (p/abs (- ballX batX)) bat-width)
             [(inc hits) misses "hit"
              (nar/nar-add-input-belief nar (term/atomic-term :good_nar))]
             [hits (inc misses) "miss" nar])
@@ -120,7 +121,7 @@
     (println (str t "," ballX "," ballY "," batX "," batVX ","
                   (or belief "none") ","
                   (if execution (subs execution 1) "none") ","
-                  score "," hits "," misses "," (.toFixed ratio 6)))
+                  score "," hits "," misses "," (p/format-decimal ratio 6)))
     ;; Dump implications on score events or every 50 ticks
     (when (or (not= score "none") (== (mod t 50) 0))
       (dump-implications nar t))
@@ -180,7 +181,7 @@
         ;; Hit/miss check
         [hits misses score nar]
         (if (== ballY 0)
-          (if (<= (js/Math.abs (- ballX batX)) bat-width)
+          (if (<= (p/abs (- ballX batX)) bat-width)
             [(inc hits) misses "hit"
              (nar/nar-add-input-belief nar (term/atomic-term :good_nar))]
             [hits (inc misses) "miss" nar])
@@ -219,7 +220,7 @@
     (println (str t "," ballX "," ballY "," batX "," batVX ","
                   belief ","
                   (if execution (subs execution 1) "none") ","
-                  score "," hits "," misses "," (.toFixed ratio 6)))
+                  score "," hits "," misses "," (p/format-decimal ratio 6)))
     ;; Dump implications on score events or every 50 ticks
     (when (or (not= score "none") (== (mod t 50) 0))
       (dump-implications nar t))
@@ -249,7 +250,7 @@
 
 (defn -main [& args]
   (let [mode (or (first args) "pong")
-        iterations (if (second args) (js/parseInt (second args)) 500)]
+        iterations (if (second args) (p/parse-int (second args)) 500)]
     (case mode
       "pong"  (run-pong iterations)
       "pong2" (run-pong2 iterations)
