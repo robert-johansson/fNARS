@@ -6,7 +6,7 @@
 (defn make-sequence
   "Create a sequence term (&/ a b). Returns {:term t :success? bool}."
   [a b]
-  (let [base (term/atomic-term term/SEQUENCE)
+  (let [base (term/atomic-term term/sequence*)
         t (-> base
               (term/override-subterm 1 a)
               (term/override-subterm 2 b))]
@@ -15,39 +15,39 @@
 (defn make-implication-term
   "Create a temporal implication term (=/> a b)."
   [a b]
-  (-> (term/atomic-term term/TEMPORAL-IMPLICATION)
+  (-> (term/atomic-term term/temporal-implication)
       (term/override-subterm 1 a)
       (term/override-subterm 2 b)))
 
 (defn make-inheritance
   "Create an inheritance term (--> a b)."
   [a b]
-  (-> (term/atomic-term term/INHERITANCE)
+  (-> (term/atomic-term term/inheritance)
       (term/override-subterm 1 a)
       (term/override-subterm 2 b)))
 
 (defn make-product
   "Create a product term (* a b)."
   [a b]
-  (-> (term/atomic-term term/PRODUCT)
+  (-> (term/atomic-term term/product)
       (term/override-subterm 1 a)
       (term/override-subterm 2 b)))
 
 (defn make-ext-set
   "Create an extensional set term {a}."
   [a]
-  (-> (term/atomic-term term/EXT-SET)
+  (-> (term/atomic-term term/ext-set)
       (term/override-subterm 1 a)
-      (assoc 2 term/SET-TERMINATOR)))
+      (assoc 2 term/set-terminator)))
 
 (defn is-operation?
   "Check if term is an operation: ^op or <(*,{SELF},x) --> ^op>."
   [t]
   (or (term/is-operator? (term/term-root t))
-      (and (term/copula? (term/term-root t) term/INHERITANCE)
-           (term/copula? (get t 1) term/PRODUCT)
+      (and (= (term/term-root t) term/inheritance)
+           (= (get t 1) term/product)
            (term/is-operator? (get t 2))
-           (term/copula? (get t 3) term/EXT-SET))))
+           (= (get t 3) term/ext-set))))
 
 (defn is-executable-operation?
   "Check if term is an executable operation (has SELF or variable in agent slot)."
@@ -66,9 +66,9 @@
   [t]
   (cond
     ;; Sequence: check right child
-    (term/copula? (term/term-root t) term/SEQUENCE)
+    (= (term/term-root t) term/sequence*)
     (let [right (term/extract-subterm t 2)]
-      (when-not (term/copula? (term/term-root right) term/SEQUENCE)
+      (when-not (= (term/term-root right) term/sequence*)
         (get-operation-atom right)))
 
     ;; Atomic operator
@@ -85,7 +85,7 @@
   "Remove operation from sequence tail.
    (&/ precondition ^op) -> precondition (recursively)."
   [precondition]
-  (if (term/copula? (term/term-root precondition) term/SEQUENCE)
+  (if (= (term/term-root precondition) term/sequence*)
     (let [right (term/extract-subterm precondition 2)]
       (if (is-operation? right)
         (let [left (term/extract-subterm precondition 1)]
@@ -96,7 +96,7 @@
 (defn sequence-length
   "Count the number of components in a sequence term."
   [t]
-  (if (term/copula? (term/term-root t) term/SEQUENCE)
+  (if (= (term/term-root t) term/sequence*)
     (+ (sequence-length (term/extract-subterm t 1))
        (sequence-length (term/extract-subterm t 2)))
     1))
@@ -119,8 +119,8 @@
   "Extract the argument term from a compound operation <(* {SELF} arg) --> ^op>.
    Returns nil for bare operators."
   [op-term]
-  (when (and (term/copula? (term/term-root op-term) term/INHERITANCE)
-             (term/copula? (get op-term 1) term/PRODUCT))
+  (when (and (= (term/term-root op-term) term/inheritance)
+             (= (get op-term 1) term/product))
     (term/extract-subterm op-term 4)))
 
 (defn get-operation-term-from-subject
@@ -130,14 +130,9 @@
    Matches ONA Narsese_getOperationTerm for MAX_COMPOUND_OP_LEN=1."
   [imp-subject]
   (cond
-    (term/copula? (term/term-root imp-subject) term/SEQUENCE)
+    (= (term/term-root imp-subject) term/sequence*)
     (let [right (term/extract-subterm imp-subject 2)]
       (when (is-operation? right) right))
     (is-operation? imp-subject) imp-subject
     :else nil))
 
-(defn is-simple-atom?
-  "Check if an atom is a simple atom (not copula, not nil, not variable prefix).
-   Simple atoms are user-defined terms like :green, :left, :^pick."
-  [atom]
-  (term/simple-atom? atom))

@@ -10,7 +10,7 @@
   [stamp1 stamp2]
   (let [n1 (count stamp1)
         n2 (count stamp2)]
-    (loop [i 0 j 0 result [] s1-active true s2-active true]
+    (loop [i 0 result [] s1-active true s2-active true]
       (if (or (>= (count result) stamp-size)
               (and (not s1-active) (not s2-active)))
         result
@@ -25,7 +25,7 @@
                 [result-after-s1 (and s2-active (< i n2))])]
           (if (>= (count result) stamp-size)
             result
-            (recur (inc i) j result s1-active s2-active)))))))
+            (recur (inc i) result s1-active s2-active)))))))
 
 (defn stamp-overlap?
   "Check if two stamps share any evidence IDs.

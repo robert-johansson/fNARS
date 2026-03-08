@@ -128,16 +128,15 @@
                   (term/is-operator? (term/term-root term))
                   (term/term-root term)
 
-                  (and (term/copula? (term/term-root term) term/INHERITANCE)
-                       (term/copula? (get term 1) term/PRODUCT)
+                  (and (= (term/term-root term) term/inheritance)
+                       (= (get term 1) term/product)
                        (term/is-operator? (get term 2)))
                   (get term 2)
 
                   :else nil)]
     (if op-atom
-      (or (first (keep-indexed
-                   (fn [i op]
-                     (when (= (:atom op) op-atom) (inc i)))
-                   (vals (:operations state))))
+      (or (first (keep (fn [[k v]]
+                         (when (= (:atom v) op-atom) k))
+                       (:operations state)))
           0)
       0)))

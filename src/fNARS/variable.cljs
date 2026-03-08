@@ -3,8 +3,7 @@
    Variable atoms: :$1-:$9 (independent), :#1-:#9 (dependent), :?1-:?9 (query).
    Unification, substitution, variable introduction, and normalization."
   (:require [fNARS.term :as term]
-            [fNARS.truth :as truth]
-            [fNARS.narsese :as narsese]))
+            [fNARS.truth :as truth]))
 
 (defn independent-var?
   "Check if atom is an independent variable ($1-$9)."
@@ -82,7 +81,7 @@
                   {:success false :substitution {}}
 
                   ;; Set terminator not allowed
-                  (term/copula? (term/term-root subtree) term/SET-TERMINATOR)
+                  (= (term/term-root subtree) term/set-terminator)
                   {:success false :substitution {}}
 
                   ;; Check consistency with existing binding
@@ -132,7 +131,7 @@
                   (and (query-var? g-atom) (variable? (term/term-root subtree)))
                   {:success false :substitution {} :truth tv}
 
-                  (term/copula? (term/term-root subtree) term/SET-TERMINATOR)
+                  (= (term/term-root subtree) term/set-terminator)
                   {:success false :substitution {} :truth tv}
 
                   (and (contains? substitution g-atom)
@@ -168,21 +167,23 @@
 (defn apply-substitute
   "Apply a substitution to a term, replacing variables with their bindings."
   [t substitution]
-  (reduce
-    (fn [current-term i]
-      (let [atom (get current-term i)]
-        (if (and (variable? atom) (contains? substitution atom))
-          (term/override-subterm current-term i (get substitution atom))
-          current-term)))
+  (if (empty? substitution)
     t
-    (range term/compound-term-size-max)))
+    (reduce
+      (fn [current-term i]
+        (let [atom (get current-term i)]
+          (if (and (variable? atom) (contains? substitution atom))
+            (term/override-subterm current-term i (get substitution atom))
+            current-term)))
+      t
+      (range term/compound-term-size-max))))
 
 ;; -- Variable Introduction --
 
 (defn- count-all-simple-atoms
   "Count all simple atoms in a term's flat vector. Used after descending into statements."
   [t]
-  (frequencies (filter narsese/is-simple-atom? t)))
+  (frequencies (filter term/simple-atom? t)))
 
 (defn- merge-counts [a b]
   (merge-with + a b))
@@ -196,22 +197,22 @@
   (let [root (term/term-root t)]
     (cond
       ;; Negation: recurse into child
-      (term/copula? root term/NEGATION)
+      (= root term/negation)
       (count-atoms-in-statements (term/extract-subterm t 1))
 
       ;; Higher-order connectives: recurse into both sides
-      (or (term/copula? root term/SEQUENCE)
-          (term/copula? root term/CONJUNCTION)
-          (term/copula? root term/TEMPORAL-IMPLICATION)
-          (term/copula? root term/IMPLICATION)
-          (term/copula? root term/EQUIVALENCE))
+      (or (= root term/sequence*)
+          (= root term/conjunction)
+          (= root term/temporal-implication)
+          (= root term/implication)
+          (= root term/equivalence))
       (merge-counts
         (count-atoms-in-statements (term/extract-subterm t 1))
         (count-atoms-in-statements (term/extract-subterm t 2)))
 
       ;; Inheritance or similarity: count all simple atoms inside
-      (or (term/copula? root term/INHERITANCE)
-          (term/copula? root term/SIMILARITY))
+      (or (= root term/inheritance)
+          (= root term/similarity))
       (count-all-simple-atoms t)
 
       ;; Bare atom or other: nothing to count
@@ -248,7 +249,7 @@
             (if (>= i term/compound-term-size-max)
               {:term result :success? true}
               (let [atom (get original i)]
-                (if (and (some? atom) (narsese/is-simple-atom? atom))
+                (if (and (some? atom) (term/simple-atom? atom))
                   (let [in-left (get left-counts atom)
                         in-right (get right-counts atom)
                         needs-var? (or (and in-left (>= in-left 2))

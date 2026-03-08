@@ -20,11 +20,10 @@
 
     (.on rl "line"
       (fn [line]
-        (let [{:keys [state output]} (shell/process-input @state line)
-              new-state state]
-          (reset! state new-state)
-          (when (seq output)
-            (println output))
+        (let [result (shell/process-input @state line)]
+          (reset! state (:state result))
+          (when (seq (:output result))
+            (println (:output result)))
           (.prompt rl))))
 
     (.on rl "close"

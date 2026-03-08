@@ -19,12 +19,12 @@
   [table implication]
   (let [{:keys [items max-size]} table
         imp-exp (truth/truth-expectation (:truth implication))
-        count (count items)]
+        n-items (cljs.core/count items)]
     ;; Find insertion point
     (loop [i 0]
-      (if (>= i (min count max-size))
+      (if (>= i (min n-items max-size))
         ;; Reached the end or max size
-        (if (< count max-size)
+        (if (< n-items max-size)
           ;; Still room, append
           {:table (assoc table :items (conj items implication))
            :added implication}
@@ -36,10 +36,10 @@
           (if (or (and same-term? (> (:confidence (:truth implication))
                                      (:confidence (:truth existing))))
                   (and (not same-term?) (> imp-exp existing-exp))
-                  (== i count))
+                  (== i n-items))
             ;; Insert here, shift rest down, evict last if at max
             (let [before (subvec items 0 i)
-                  after (subvec items i (min count (dec max-size)))
+                  after (subvec items i (min n-items (dec max-size)))
                   new-items (vec (concat before [implication] after))]
               {:table (assoc table :items new-items)
                :added implication})

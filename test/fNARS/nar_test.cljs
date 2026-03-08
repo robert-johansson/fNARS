@@ -91,10 +91,10 @@
 (deftest test-term-compound
   (let [subj (term/atomic-term :cat)
         pred (term/atomic-term :animal)
-        inh (-> (term/atomic-term term/INHERITANCE)
+        inh (-> (term/atomic-term term/inheritance)
                 (term/override-subterm 1 subj)
                 (term/override-subterm 2 pred))]
-    (is (= (term/term-root inh) term/INHERITANCE))
+    (is (= (term/term-root inh) term/inheritance))
     (is (= (term/term-root (term/extract-subterm inh 1)) :cat))
     (is (= (term/term-root (term/extract-subterm inh 2)) :animal))
     (is (= (term/term-complexity inh) 3))))
@@ -156,7 +156,7 @@
         b (term/atomic-term :blue)
         {:keys [term success?]} (narsese/make-sequence a b)]
     (is success?)
-    (is (term/copula? (term/term-root term) term/SEQUENCE))
+    (is (= (term/term-root term) term/sequence*))
     (is (= (term/term-root (term/extract-subterm term 1)) :green))
     (is (= (term/term-root (term/extract-subterm term 2)) :blue))))
 
@@ -189,7 +189,7 @@
                              :creation-time 11})
         result (inference/belief-intersection a b config)]
     (is (some? result))
-    (is (term/copula? (term/term-root (:term result)) term/SEQUENCE))))
+    (is (= (term/term-root (:term result)) term/sequence*))))
 
 (deftest test-belief-induction
   (let [config nar-config/default-config
@@ -207,7 +207,7 @@
                              :creation-time 11})
         result (inference/belief-induction a b config)]
     (is (some? result))
-    (is (term/copula? (term/term-root (:term result)) term/TEMPORAL-IMPLICATION))
+    (is (= (term/term-root (:term result)) term/temporal-implication))
     (is (approx= (:occurrence-time-offset result) 1.0))))
 
 (deftest test-revision-and-choice
@@ -239,7 +239,7 @@
   (is (not (variable/variable? :cat))))
 
 (deftest test-unify
-  (let [general (-> (term/atomic-term term/INHERITANCE)
+  (let [general (-> (term/atomic-term term/inheritance)
                     (term/override-subterm 1 (term/atomic-term :$1))
                     (term/override-subterm 2 (term/atomic-term :animal)))
         specific (narsese/make-inheritance (term/atomic-term :cat) (term/atomic-term :animal))
@@ -248,7 +248,7 @@
     (is (= (term/term-root (get (:substitution result) :$1)) :cat))))
 
 (deftest test-apply-substitute
-  (let [general (-> (term/atomic-term term/INHERITANCE)
+  (let [general (-> (term/atomic-term term/inheritance)
                     (term/override-subterm 1 (term/atomic-term :$1))
                     (term/override-subterm 2 (term/atomic-term :animal)))
         sub {:$1 (term/atomic-term :cat)}
@@ -256,7 +256,7 @@
     (is (= (term/term-root (term/extract-subterm result 1)) :cat))))
 
 (deftest test-normalize-variables
-  (let [t (-> (term/atomic-term term/INHERITANCE)
+  (let [t (-> (term/atomic-term term/inheritance)
               (term/override-subterm 1 (term/atomic-term :$5))
               (term/override-subterm 2 (term/atomic-term :$5)))
         normalized (variable/normalize-variables t)]
@@ -290,7 +290,7 @@
   (let [result (parser/parse-narsese "<cat --> animal>.")]
     (is (some? result))
     (is (= (:type result) :belief))
-    (is (term/copula? (term/term-root (:term result)) term/INHERITANCE))))
+    (is (= (term/term-root (:term result)) term/inheritance))))
 
 (deftest test-parse-goal
   (let [result (parser/parse-narsese "<reward --> good>! :|:")]

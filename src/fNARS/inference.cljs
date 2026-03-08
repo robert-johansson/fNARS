@@ -87,7 +87,7 @@
         overlap? (stamp/stamp-overlap? (:stamp a) (:stamp b))
         ;; For temporal implications, always do full revision
         ;; For non-temporal, check overlap
-        is-non-temporal? (term/copula? (term/term-root (:term a)) term/IMPLICATION)
+        is-non-temporal? (= (term/term-root (:term a)) term/implication)
         [t s] (if overlap?
                 ;; Choice: keep higher confidence
                 (if (> (:confidence (:truth a)) (:confidence (:truth b)))

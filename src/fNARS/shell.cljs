@@ -22,55 +22,55 @@
       (nil? root) "@"
 
       ;; Inheritance: <S --> P>
-      (term/copula? root term/INHERITANCE)
+      (= root term/inheritance)
       (str "<" (format-term (term/extract-subterm t 1))
            " --> " (format-term (term/extract-subterm t 2)) ">")
 
       ;; Similarity: <S <-> P>
-      (term/copula? root term/SIMILARITY)
+      (= root term/similarity)
       (str "<" (format-term (term/extract-subterm t 1))
            " <-> " (format-term (term/extract-subterm t 2)) ">")
 
       ;; Temporal implication: <S =/> P>
-      (term/copula? root term/TEMPORAL-IMPLICATION)
+      (= root term/temporal-implication)
       (str "<" (format-term (term/extract-subterm t 1))
            " =/> " (format-term (term/extract-subterm t 2)) ">")
 
       ;; Implication: <S ==> P>
-      (term/copula? root term/IMPLICATION)
+      (= root term/implication)
       (str "<" (format-term (term/extract-subterm t 1))
            " ==> " (format-term (term/extract-subterm t 2)) ">")
 
       ;; Equivalence: <S <=> P>
-      (term/copula? root term/EQUIVALENCE)
+      (= root term/equivalence)
       (str "<" (format-term (term/extract-subterm t 1))
            " <=> " (format-term (term/extract-subterm t 2)) ">")
 
       ;; Sequence: (&/ S P)
-      (term/copula? root term/SEQUENCE)
+      (= root term/sequence*)
       (str "(&/ " (format-term (term/extract-subterm t 1))
            " " (format-term (term/extract-subterm t 2)) ")")
 
       ;; Conjunction: (&& S P)
-      (term/copula? root term/CONJUNCTION)
+      (= root term/conjunction)
       (str "(&& " (format-term (term/extract-subterm t 1))
            " " (format-term (term/extract-subterm t 2)) ")")
 
       ;; Product: (* S P)
-      (term/copula? root term/PRODUCT)
+      (= root term/product)
       (str "(* " (format-term (term/extract-subterm t 1))
            " " (format-term (term/extract-subterm t 2)) ")")
 
       ;; Negation: (-- S)
-      (term/copula? root term/NEGATION)
+      (= root term/negation)
       (str "(-- " (format-term (term/extract-subterm t 1)) ")")
 
       ;; Ext set: {x}
-      (term/copula? root term/EXT-SET)
+      (= root term/ext-set)
       (str "{" (format-term (term/extract-subterm t 1)) "}")
 
       ;; Int set: [x]
-      (term/copula? root term/INT-SET)
+      (= root term/int-set)
       (str "[" (format-term (term/extract-subterm t 1)) "]")
 
       ;; Atomic term
@@ -193,7 +193,9 @@
          :output (str "Set operation " op-idx " arg " arg-idx " to " arg-str)})
 
       (str/starts-with? line "*babblingops=")
-      {:state state :output ""}
+      (let [val (js/parseInt (subs line 13))]
+        {:state (assoc-in state [:config :babbling-ops] val)
+         :output (str "Babbling ops set to " val)})
 
       (str/starts-with? line "//")
       {:state state :output ""}

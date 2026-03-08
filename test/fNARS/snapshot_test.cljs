@@ -145,9 +145,9 @@
 
     (testing "implication has correct structure"
       ;; Should be <(X &/ ^left) =/> <good --> nar>>
-      (is (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION))
+      (is (= (term/term-root (:term imp)) term/temporal-implication))
       (let [precond (term/extract-subterm (:term imp) 1)]
-        (is (term/copula? (term/term-root precond) term/SEQUENCE)
+        (is (= (term/term-root precond) term/sequence*)
             "precondition should be a sequence")))
 
     (testing "source concept key set"
@@ -224,9 +224,9 @@
 
         self-good (narsese/make-inheritance
                     (narsese/make-ext-set (term/atomic-term :SELF))
-                    (-> (term/atomic-term term/INT-SET)
+                    (-> (term/atomic-term term/int-set)
                         (term/override-subterm 1 (term/atomic-term :good))
-                        (assoc 2 term/SET-TERMINATOR)))]
+                        (assoc 2 term/set-terminator)))]
 
     ;; Check both ops have implications
     (testing "implications per op"
@@ -602,14 +602,14 @@
       (let [imp (scan-implications state 0 [:A :B])]
         (is (some? imp) "Should have op-id=0 implication with A and B atoms")
         (when imp
-          (is (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION)
+          (is (= (term/term-root (:term imp)) term/temporal-implication)
               "Should be temporal implication"))))
 
     (testing "sequence (A &/ B) concept exists"
       ;; The sequence should have been added to concepts via
       ;; activate-sensorimotor-concept
       (let [has-seq? (some (fn [[t _]]
-                             (and (term/copula? (term/term-root t) term/SEQUENCE)
+                             (and (= (term/term-root t) term/sequence*)
                                   (term/has-atom t :A)
                                   (term/has-atom t :B)))
                            (:concepts state))]
@@ -618,7 +618,7 @@
     (testing "time index contains sequence"
       (let [items (get-in state [:time-index :items])
             has-seq? (some (fn [t]
-                             (and (term/copula? (term/term-root t) term/SEQUENCE)
+                             (and (= (term/term-root t) term/sequence*)
                                   (term/has-atom t :A)
                                   (term/has-atom t :B)))
                            items)]

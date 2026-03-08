@@ -312,7 +312,7 @@
             op-id (inc (mod r1 (min babbling-ops n-ops)))
             op-entry (get ops op-id)]
         (when (and op-entry (some? (:action op-entry)))
-          (if-let [args (:args op-entry)]
+          (if-let [args (seq (:args op-entry))]
             (let [[r2 state] (myrand state)
                   arg (nth args (mod r2 (count args)))]
               {:operation-id op-id :operation op-entry :arg arg :state state})
@@ -408,7 +408,7 @@
                   ;; From implication
                   (:implication decision)
                   (let [prec-with-op (term/extract-subterm (:term (:implication decision)) 1)]
-                    (or (when (term/copula? (term/term-root prec-with-op) term/SEQUENCE)
+                    (or (when (= (term/term-root prec-with-op) term/sequence*)
                           (let [right (term/extract-subterm prec-with-op 2)]
                             (when (narsese/is-operation? right) right)))
                         (when (narsese/is-operation? prec-with-op) prec-with-op)
@@ -471,7 +471,7 @@
                        (inference/belief-deduction prec-event imp))]
     (if-not (and result-event
                  (some? (term/term-root (:term result-event)))
-                 (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION))
+                 (= (term/term-root (:term imp)) term/temporal-implication))
       [state result-event]
       (let [result-term (:term result-event)
             subs-ev (variable/unify (:term prec-concept) (:term prec-event))
@@ -494,7 +494,7 @@
   [imp subs-event prec-event result-event anticipation-threshold]
   (and (:success subs-event)
        (not (event/event-deleted? prec-event))
-       (term/copula? (term/term-root (:term imp)) term/TEMPORAL-IMPLICATION)
+       (= (term/term-root (:term imp)) term/temporal-implication)
        (or (> (truth/truth-expectation
                 (:truth (or result-event {:truth {:frequency 0 :confidence 0}})))
               anticipation-threshold)

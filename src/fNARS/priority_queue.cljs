@@ -16,10 +16,10 @@
   [pq priority item]
   (let [{:keys [items max-size]} pq
         entry {:priority priority :item item}
-        cnt (cljs.core/count items)]
+        cnt (count items)]
     (if (< cnt max-size)
       ;; Not full: insert in sorted position
-      (let [idx (cljs.core/count (take-while #(< (:priority %) priority) items))
+      (let [idx (count (take-while #(< (:priority %) priority) items))
             new-items (vec (concat (subvec items 0 idx)
                                   [entry]
                                   (subvec items idx)))]
@@ -30,7 +30,7 @@
       (if (and (pos? cnt) (> priority (:priority (first items))))
         (let [evicted (first items)
               rest-items (subvec items 1)
-              idx (cljs.core/count (take-while #(< (:priority %) priority) rest-items))
+              idx (count (take-while #(< (:priority %) priority) rest-items))
               new-items (vec (concat (subvec rest-items 0 idx)
                                     [entry]
                                     (subvec rest-items idx)))]
