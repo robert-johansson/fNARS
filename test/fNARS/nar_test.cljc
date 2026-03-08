@@ -20,7 +20,8 @@
             [fNARS.nar :as nar]
             [fNARS.parser :as parser]
             [fNARS.shell :as shell]
-            [fNARS.nar-config :as nar-config]))
+            [fNARS.nar-config :as nar-config]
+            [clojure.string :as str]))
 
 ;; Helpers
 (defn approx= [a b & [eps]]
@@ -364,4 +365,22 @@
       (let [before state
             {:keys [state output]} (shell/process-input state "*setopstdin 1")]
         (is (= (:current-time state) (:current-time before)))
-        (is (string? output))))))
+        (is (string? output))))
+
+    (testing "*motorbabbling=false maps to 0.0"
+      (let [{:keys [state]} (shell/process-input state "*motorbabbling=false")]
+        (is (= 0.0 (get-in state [:config :motor-babbling-chance])))))
+
+    (testing "*setopname duplicate clears duplicate slot and all following slots (ONA semantics)"
+      (let [{:keys [state]} (shell/process-input state "*setopname 1 ^right")]
+        ;; ^right already existed in slot 2 by default, so ONA clears slot 2..end.
+        (is (= 1 (count (:operations state))))
+        (is (= (keyword "^right") (get-in state [:operations 1 :atom])))))
+
+    (testing "*setopname only allowed right after init/reset"
+      (let [belief "<cat --> animal>. :|:"
+            {:keys [state]} (shell/process-input state belief)
+            before (:operations state)
+            {:keys [state output]} (shell/process-input state "*setopname 1 ^custom")]
+        (is (= before (:operations state)))
+        (is (str/includes? output "right after initialization / reset"))))))

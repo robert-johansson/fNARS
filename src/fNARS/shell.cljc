@@ -151,7 +151,11 @@
          :messages [(str "Volume set to " vol)]})
 
       (str/starts-with? line "*motorbabbling=")
-      (let [val (p/parse-float (subs line 15))]
+      (let [raw (str/lower-case (str/trim (subs line 15)))
+            val (case raw
+                  "false" 0.0
+                  "true" 1.0
+                  (p/parse-float raw))]
         {:state (assoc-in state [:config :motor-babbling-chance] val)
          :entries []
          :messages [(str "Motor babbling chance set to " val)]})
@@ -165,14 +169,42 @@
       (str/starts-with? line "*setopname ")
       (let [parts (str/split (str/trim line) #"\s+")
             op-idx (p/parse-int (nth parts 1))
-            op-name (nth parts 2)]
-        {:state (assoc-in state [:operations op-idx]
-                  {:name op-name
-                   :atom (keyword op-name)
-                   :action (fn [s _] s)
-                   :args []})
-         :entries []
-         :messages [(str "Set operation " op-idx " to " op-name)]})
+            op-name (nth parts 2)
+            max-ops (get-in state [:config :operations-max] 10)]
+        (cond
+          (not (empty? (:concepts state)))
+          {:state state
+           :entries []
+           :messages ["//Operators can only be registered right after initialization / reset"]}
+
+          (or (nil? op-idx) (< op-idx 1) (> op-idx max-ops))
+          {:state state
+           :entries []
+           :messages [(str "//Operator index out of bounds (1.." max-ops ")")]}
+
+          :else
+          (let [op-atom (keyword op-name)
+                duplicate-slot (first
+                                 (for [i (sort (keys (:operations state)))
+                                       :let [entry (get-in state [:operations i])]
+                                       :when (= (:atom entry) op-atom)]
+                                   i))
+                op-entry-before (get-in state [:operations op-idx])
+                state (if duplicate-slot
+                        (update state :operations
+                          (fn [ops]
+                            (reduce (fn [acc k] (if (>= k duplicate-slot) (dissoc acc k) acc))
+                              ops
+                              (keys ops))))
+                        state)
+                op-entry (merge {:name op-name
+                                 :atom op-atom
+                                 :action (fn [s _] s)}
+                           (select-keys op-entry-before [:action :args])
+                           {:name op-name :atom op-atom})]
+            {:state (assoc-in state [:operations op-idx] op-entry)
+             :entries []
+             :messages [(str "Set operation " op-idx " to " op-name)]})))
 
       (str/starts-with? line "*setoparg ")
       (let [parts (str/split (str/trim line) #"\s+" 4)

@@ -130,7 +130,7 @@
           (cond
             ;; Skip blanks and non-expected comments
             (and (blank-or-comment? line) (not (expected-line? line)))
-            (recur state rest-lines results pending-expected)
+            (recur state rest-lines results pending-output)
 
             ;; Expected result comment
             (expected-line? line)

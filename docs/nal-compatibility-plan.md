@@ -51,6 +51,13 @@ Next:
 
 - Workstream 4: align `*setopname` operator-slot semantics with ONA
 
+Update:
+
+- Added ONA-like `*setopname` constraints/behavior in shell path:
+  - only allowed right after init/reset
+  - slot bounds checking by `operations-max`
+  - duplicate target op clears that slot and following slots
+
 ## Strategy
 
 Do not start by rewriting the inference engine.
