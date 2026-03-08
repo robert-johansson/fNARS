@@ -45,6 +45,9 @@
                        (shell "bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.nal-runner" file)
                        (println "Usage: bb nal <file.nal>")))}
 
+  nal:compat {:doc  "Run ONA vs fNARS compatibility checks over .nal examples"
+              :task (load-file "scripts/nal_compat.clj")}
+
   build:shadow {:doc  "Build shadow-cljs production bundle (target/fnars.js)"
                 :task (shell "npx shadow-cljs release fnars")}
 

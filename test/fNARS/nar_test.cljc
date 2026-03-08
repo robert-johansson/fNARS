@@ -353,4 +353,15 @@
 
     (testing "concepts command"
       (let [{:keys [output]} (shell/process-input state "*concepts")]
+        (is (string? output))))
+
+    (testing "*concurrent decrements current-time"
+      (let [t0 (:current-time state)
+            {:keys [state]} (shell/process-input state "*concurrent")]
+        (is (= (:current-time state) (dec t0)))))
+
+    (testing "*setopstdin accepted as compatibility no-op"
+      (let [before state
+            {:keys [state output]} (shell/process-input state "*setopstdin 1")]
+        (is (= (:current-time state) (:current-time before)))
         (is (string? output))))))

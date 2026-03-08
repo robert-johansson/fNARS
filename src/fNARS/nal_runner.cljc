@@ -90,6 +90,12 @@
       (let [val (p/parse-float (subs trimmed (count "*anticipationconfidence=")))]
         (update state :config assoc :anticipation-confidence val))
 
+      (= trimmed "*concurrent")
+      (update state :current-time dec)
+
+      (str/starts-with? trimmed "*setopstdin ")
+      state
+
       :else state)))
 
 ;; -- Answer checking --

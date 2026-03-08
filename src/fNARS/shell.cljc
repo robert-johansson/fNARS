@@ -200,6 +200,17 @@
         {:state (assoc-in state [:config :anticipation-confidence] val)
          :output (str "Anticipation confidence set to " val)})
 
+      (str/starts-with? line "*setopstdin ")
+      ;; ONA shell supports this for channel integration. fNARS has no stdin op channel,
+      ;; so we accept it as a compatibility no-op for .nal replay parity.
+      {:state state
+       :output "Set op stdin (no-op in fNARS)"}
+
+      (= line "*concurrent")
+      ;; ONA shell semantics: decrement currentTime by 1.
+      {:state (update state :current-time dec)
+       :output ""}
+
       (str/starts-with? line "//")
       {:state state :output ""}
 
