@@ -16,10 +16,29 @@
    :precondition-beliefs {}              ;; op-id -> table of implications
    :implication-links (table/table-init) ;; temporal implication table
    :priority 0.0
+   :priority-epoch 0                     ;; epoch when priority was last set
    :last-selection-time 0
    :process-id 0
    :process-id2 0
    :process-id3 0})
+
+(defn effective-priority
+  "Compute the effective priority of a concept, applying lazy decay.
+   effective = raw-priority * (concept-durability ^ (current-epoch - stored-epoch))"
+  [concept decay-epoch concept-dur]
+  (let [age (- decay-epoch (:priority-epoch concept 0))]
+    (if (zero? age)
+      (:priority concept)
+      (* (:priority concept) (js/Math.pow concept-dur age)))))
+
+(defn priority-set-max
+  "Set concept priority to max of current effective priority and new-val.
+   Materializes the decayed priority and resets epoch."
+  [concept new-val decay-epoch concept-dur]
+  (let [eff (effective-priority concept decay-epoch concept-dur)]
+    (if (>= new-val eff)
+      (assoc concept :priority new-val :priority-epoch decay-epoch)
+      (assoc concept :priority eff :priority-epoch decay-epoch))))
 
 (defn usage-usefulness
   "Compute usefulness score for concept eviction.

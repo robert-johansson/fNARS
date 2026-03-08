@@ -34,6 +34,8 @@
         (if-not concept
           state
           (let [temporal? (not= (:occurrence-time ev) truth/occurrence-eternal)
+                decay-epoch (:decay-epoch state)
+                concept-dur (:concept-durability config)
                 ;; Update belief spike for temporal events
                 state (if temporal?
                         (memory/update-concept state (:term ev)
@@ -43,7 +45,7 @@
                               (-> c
                                   (assoc :belief-spike (:event result))
                                   (update :usage concept/usage-use current-time false)
-                                  (update :priority max priority)))))
+                                  (concept/priority-set-max priority decay-epoch concept-dur)))))
                         state)
                 ;; Eternalize and update eternal belief
                 state (if eternalize?
@@ -208,7 +210,7 @@
         nal-level (:semantic-inference-nal-level config)]
     (if (<= nal-level 0)
       state
-      (let [rules (:nal-rules state)
+      (let [rule-index (:nal-rule-index state)
             ev (:event selected-belief)
             priority (:priority selected-belief)
             current-time (:current-time state)
@@ -234,61 +236,79 @@
                                                (truth/truth-expectation conclusion-truth))]
                             (add-derived-belief state derived-ev der-priority eternalize?)))))
                     state
-                    (rule-table/apply-rules rules term1 term/empty-term
+                    (rule-table/indexed-apply-rules rule-index term1 term/empty-term
                       truth1 truth/default-truth config false))
             ;; Double-premise inference (R2 rules + special inferences)
+            ;; Adaptive concept priority threshold (ONA Cycle.c:982-989)
+            threshold (:concept-priority-threshold state 0.0)
+            matched-avg (if (pos? current-time)
+                          (/ (:concepts-matched-total state 0) current-time)
+                          0)
+            target (:belief-concept-match-target config)
+            increment (* (- matched-avg target) (:concept-threshold-adaptation config))
+            threshold (min 1.0 (max 0.0 (+ threshold increment)))
+            state (assoc state :concept-priority-threshold threshold)
             related (memory/related-concepts state term1 (:unification-depth config))
-            state (reduce
-                    (fn [state related-concept]
-                      (if-let [{:keys [belief eternalize?]}
-                               (select-belief-for-concept related-concept occ1 config)]
-                        (let [term2 (:term belief)
-                              truth2 (:truth belief)
-                              conclusion-stamp (stamp/stamp-make (:stamp ev) (:stamp belief))
-                              conclusion-occ (if eternalize? truth/occurrence-eternal occ1)]
-                          (if (stamp/stamp-overlap? (:stamp ev) (:stamp belief))
-                            state
-                            (let [;; Apply rule table
-                                  state (reduce
-                                          (fn [state derivation]
-                                            (let [raw-term (rule-table/reduce-conclusion (:term derivation))
-                                                  ;; Variable introduction: replace shared atoms with variables
-                                                  conclusion-term (if (:var-intro? derivation)
-                                                                    (let [{:keys [term success?]}
-                                                                          (variable/introduce-implication-variables raw-term)]
-                                                                      (if success? term raw-term))
-                                                                    raw-term)
-                                                  conclusion-truth (:truth derivation)]
-                                              (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
-                                                state
-                                                (let [derived-ev (event/make-event
-                                                                  {:term conclusion-term
-                                                                   :type event/event-type-belief
-                                                                   :truth conclusion-truth
-                                                                   :stamp conclusion-stamp
-                                                                   :occurrence-time conclusion-occ
-                                                                   :creation-time current-time})
-                                                      der-priority (* priority
-                                                                     (:priority related-concept 0.5)
-                                                                     (truth/truth-expectation conclusion-truth))]
-                                                  (add-derived-belief state derived-ev der-priority eternalize?)))))
-                                          state
-                                          (rule-table/apply-rules rules term1 term2
-                                            truth1 truth2 config true))
-                                  ;; Special inferences (NAL 6+): both term orderings
-                                  state (if (>= nal-level 6)
-                                          (-> state
-                                              (special-inferences term1 term2 truth1 truth2
-                                                conclusion-stamp conclusion-occ priority
-                                                (:priority related-concept 0.5) eternalize?)
-                                              (special-inferences term2 term1 truth2 truth1
-                                                conclusion-stamp conclusion-occ priority
-                                                (:priority related-concept 0.5) eternalize?))
-                                          state)]
-                              state)))
-                        state))
-                    state
-                    related)]
+            decay-epoch (:decay-epoch state)
+            concept-dur (:concept-durability config)
+            ;; Process related concepts with priority filtering and cap
+            state (loop [remaining (seq related)
+                         state state
+                         matched 0]
+                    (if (or (nil? remaining) (>= matched target))
+                      (update state :concepts-matched-total + matched)
+                      (let [related-concept (first remaining)
+                            eff-priority (concept/effective-priority
+                                           related-concept decay-epoch concept-dur)]
+                        (if (< eff-priority threshold)
+                          (recur (next remaining) state matched)
+                          (let [state
+                                (if-let [{:keys [belief eternalize?]}
+                                         (select-belief-for-concept related-concept occ1 config)]
+                                  (let [term2 (:term belief)
+                                        truth2 (:truth belief)
+                                        conclusion-stamp (stamp/stamp-make (:stamp ev) (:stamp belief))
+                                        conclusion-occ (if eternalize? truth/occurrence-eternal occ1)]
+                                    (if (stamp/stamp-overlap? (:stamp ev) (:stamp belief))
+                                      state
+                                      (let [;; Apply rule table
+                                            state (reduce
+                                                    (fn [state derivation]
+                                                      (let [raw-term (rule-table/reduce-conclusion (:term derivation))
+                                                            conclusion-term (if (:var-intro? derivation)
+                                                                              (let [{:keys [term success?]}
+                                                                                    (variable/introduce-implication-variables raw-term)]
+                                                                                (if success? term raw-term))
+                                                                              raw-term)
+                                                            conclusion-truth (:truth derivation)]
+                                                        (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
+                                                          state
+                                                          (let [derived-ev (event/make-event
+                                                                            {:term conclusion-term
+                                                                             :type event/event-type-belief
+                                                                             :truth conclusion-truth
+                                                                             :stamp conclusion-stamp
+                                                                             :occurrence-time conclusion-occ
+                                                                             :creation-time current-time})
+                                                                der-priority (* priority eff-priority
+                                                                               (truth/truth-expectation conclusion-truth))]
+                                                            (add-derived-belief state derived-ev der-priority eternalize?)))))
+                                                    state
+                                                    (rule-table/indexed-apply-rules rule-index term1 term2
+                                                      truth1 truth2 config true))
+                                            ;; Special inferences (NAL 6+): both term orderings
+                                            state (if (>= nal-level 6)
+                                                    (-> state
+                                                        (special-inferences term1 term2 truth1 truth2
+                                                          conclusion-stamp conclusion-occ priority
+                                                          eff-priority eternalize?)
+                                                        (special-inferences term2 term1 truth2 truth1
+                                                          conclusion-stamp conclusion-occ priority
+                                                          eff-priority eternalize?))
+                                                    state)]
+                                        state)))
+                                  state)]
+                            (recur (next remaining) state (inc matched)))))))]
         state))))
 
 ;; -- Event Selection --
@@ -345,7 +365,8 @@
                         (assoc :belief-spike (:event belief-spike-result))
                         (assoc :belief (:event belief-result))
                         (update :usage concept/usage-use current-time false)
-                        (update :priority max (:priority ev 0.5)))]
+                        (concept/priority-set-max (:priority ev 0.5)
+                          (:decay-epoch state) (:concept-durability config)))]
         (assoc-in state [:concepts term] concept))
       state)))
 
@@ -772,14 +793,8 @@
               (fn [m k pq] (assoc m k (pq/pq-rebuild pq event-dur)))
               pqs
               pqs)))
-        ;; Decay concept priorities
-        (update :concepts
-          (fn [concepts]
-            (persistent!
-              (reduce-kv
-                (fn [m k c] (assoc! m k (update c :priority * concept-dur)))
-                (transient concepts)
-                concepts)))))))
+        ;; Lazy concept priority decay: increment epoch instead of touching all concepts
+        (update :decay-epoch inc))))
 
 ;; -- Process pending events --
 
@@ -815,7 +830,8 @@
                                       (assoc :belief-spike (:event belief-spike-result))
                                       (assoc :belief (:event belief-result))
                                       (update :usage concept/usage-use current-time false)
-                                      (update :priority max 1.0))))
+                                      (concept/priority-set-max 1.0
+                                        (:decay-epoch state) (:concept-durability config)))))
                   ;; Add to time index
                   state (if (not= (:occurrence-time ev) truth/occurrence-eternal)
                           (update state :time-index

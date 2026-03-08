@@ -24,6 +24,9 @@
    {:current-time 1
     :stamp-counter 1
     :next-concept-id 0
+    :decay-epoch 0
+    :concept-priority-threshold 0.0
+    :concepts-matched-total 0
     :config config
     :concepts {}
     :atom-index {}
@@ -34,6 +37,8 @@
     :operations {}
     :rng-state [0 42]
     :nal-rules (rule-table/rules-for-level (:semantic-inference-nal-level config))
+    :nal-rule-index (rule-table/build-rule-index
+                      (rule-table/rules-for-level (:semantic-inference-nal-level config)))
     :output []}))
 
 (defn nar-add-operation
@@ -98,7 +103,8 @@
                           (-> c
                               (assoc :belief-spike (:event result))
                               (update :usage concept/usage-use current-time false)
-                              (update :priority max priority)))))
+                              (concept/priority-set-max priority
+                                (:decay-epoch state) (:concept-durability config))))))
                     state)
             state (if (and temporal? (> (:occurrence-time ev) current-time))
                     (memory/update-concept state (:term ev)
@@ -281,7 +287,8 @@
         state (if-let [c (:concept best)]
                 (memory/update-concept state (:term c)
                   #(-> %
-                       (update :priority max (:question-priming config))
+                       (concept/priority-set-max (:question-priming config)
+                         (:decay-epoch state) (:concept-durability config))
                        (update :usage concept/usage-use current-time (= tense :eternal))))
                 state)]
     {:state state

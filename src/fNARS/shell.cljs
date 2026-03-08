@@ -113,7 +113,9 @@
          (str/join "\n"
            (map (fn [[k c]]
                   (str "  " (format-term k)
-                       " priority=" (.toFixed (:priority c) 4)
+                       " priority=" (.toFixed (concept/effective-priority c
+                                               (:decay-epoch state 0)
+                                               (:concept-durability (:config state) 0.9)) 4)
                        " usefulness=" (.toFixed (concept/usage-usefulness (:usage c) (:current-time state)) 4)
                        (when-not (event/event-deleted? (:belief c))
                          (str " belief=" (format-truth (:truth (:belief c)))))

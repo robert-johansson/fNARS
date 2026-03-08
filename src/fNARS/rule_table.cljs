@@ -489,6 +489,67 @@
               (apply-rule rule term1 term2 truth1 truth2 config))))
     rules))
 
+;; -- Copula-Based Rule Indexing --
+;; Index rules by root copula of p1/p2 patterns to avoid scanning all rules.
+
+(def ^:private reverse-copula-map
+  "Map from term copula keyword to pattern keyword."
+  (into {} (map (fn [[k v]] [v k])) copula-map))
+
+(defn- pattern-copula-key
+  "Extract the root copula key from a pattern, or :* for bare-variable patterns."
+  [pattern]
+  (if (and (= 1 (count pattern)) (pattern-var? (first pattern)))
+    :*
+    (let [first-el (first pattern)]
+      (if (contains? copula-map first-el)
+        first-el
+        :*))))
+
+(defn- term-copula-key
+  "Extract the copula key from a runtime term for index lookup."
+  [t]
+  (get reverse-copula-map (term/term-root t) :unknown))
+
+(defn build-rule-index
+  "Build a copula-indexed rule lookup structure from a rule vector.
+   Returns {:single {cop-key [rules...]} :double {[cop1 cop2] [rules...]}}."
+  [rules]
+  (reduce
+    (fn [{:keys [single double]} rule]
+      (let [p1-key (pattern-copula-key (:p1 rule))]
+        (if (:double? rule)
+          (let [p2-key (pattern-copula-key (:p2 rule))
+                k [p1-key p2-key]]
+            {:single single
+             :double (update double k (fnil conj []) rule)})
+          {:single (update single p1-key (fnil conj []) rule)
+           :double double})))
+    {:single {} :double {}}
+    rules))
+
+(defn indexed-apply-rules
+  "Apply matching rules using copula index. Much faster than scanning all rules."
+  [index term1 term2 truth1 truth2 config double-premise?]
+  (if double-premise?
+    (let [cop1 (term-copula-key term1)
+          cop2 (term-copula-key term2)
+          dbl (:double index)
+          ;; Lookup exact + wildcard buckets
+          rules (concat (get dbl [cop1 cop2])
+                        (get dbl [:* cop2])
+                        (get dbl [cop1 :*])
+                        (get dbl [:* :*]))]
+      (into []
+        (keep (fn [rule] (apply-rule rule term1 term2 truth1 truth2 config)))
+        rules))
+    (let [cop1 (term-copula-key term1)
+          sgl (:single index)
+          rules (concat (get sgl cop1) (get sgl :*))]
+      (into []
+        (keep (fn [rule] (apply-rule rule term1 term2 truth1 truth2 config)))
+        rules))))
+
 ;; -- Term Reductions --
 ;; Applied to conclusion terms after rule application.
 ;; ONA's RuleTable_Reduce: simplify idempotent ops and merge sets.
