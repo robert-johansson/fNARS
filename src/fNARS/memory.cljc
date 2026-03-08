@@ -14,27 +14,39 @@
 
 (defn- add-to-atom-index
   "Add a term's atoms to the inverted atom index."
-  [atom-index term-key term]
-  (loop [i 0 idx atom-index]
-    (if (>= i term/compound-term-size-max)
-      idx
-      (let [id (get term i)]
-        (recur (inc i)
-               (if (and (pos? id) (not (ar/copula-id? id)))
-                 (update idx id (fnil conj #{}) term-key)
-                 idx))))))
+  [atom-index term-key term max-depth]
+  (let [limit (min (max 0 (long max-depth)) term/compound-term-size-max)]
+    (loop [i 0 idx atom-index]
+      (if (>= i limit)
+        idx
+        (let [id (get term i)]
+          (recur (inc i)
+                 (if (and (pos? id) (not (ar/copula-id? id)))
+                   ;; Preserve insertion order to mirror ONA's concept chains.
+                   (update idx id
+                     (fn [entries]
+                       (let [entries (or entries [])]
+                         (if (some #(= % term-key) entries)
+                           entries
+                           (conj entries term-key)))))
+                   idx)))))))
 
 (defn- remove-from-atom-index
   "Remove a term's atoms from the inverted atom index."
-  [atom-index term]
-  (loop [i 0 idx atom-index]
-    (if (>= i term/compound-term-size-max)
-      idx
-      (let [id (get term i)]
-        (recur (inc i)
-               (if (and (pos? id) (not (ar/copula-id? id)))
-                 (update idx id disj term)
-                 idx))))))
+  [atom-index term max-depth]
+  (let [limit (min (max 0 (long max-depth)) term/compound-term-size-max)]
+    (loop [i 0 idx atom-index]
+      (if (>= i limit)
+        idx
+        (let [id (get term i)]
+          (recur (inc i)
+                 (if (and (pos? id) (not (ar/copula-id? id)))
+                   (update idx id
+                     (fn [entries]
+                       (if (seq entries)
+                         (into [] (remove #(= % term) entries))
+                         entries)))
+                   idx)))))))
 
 ;; -- Occurrence Time Index --
 
@@ -75,6 +87,7 @@
   (if-let [existing (find-concept state term)]
     [state existing]
     (let [config (:config state)
+          unification-depth (:unification-depth config)
           concepts (:concepts state)
           concept-id (:next-concept-id state 0)
           [state concepts]
@@ -85,7 +98,10 @@
                                concepts)
                   worst-key (first worst)
                   worst-concept (second worst)
-                  atom-index (remove-from-atom-index (:atom-index state) (:term worst-concept))
+                  atom-index (remove-from-atom-index
+                               (:atom-index state)
+                               (:term worst-concept)
+                               unification-depth)
                   state (-> (assoc state :atom-index atom-index)
                             (perf-inc :concepts-evicted))
                   concepts (dissoc concepts worst-key)]
@@ -93,7 +109,11 @@
             [state concepts])
           new-concept (concept/make-concept concept-id term current-time)
           concepts (assoc concepts term new-concept)
-          atom-index (add-to-atom-index (:atom-index state) term term)
+          atom-index (add-to-atom-index
+                       (:atom-index state)
+                       term
+                       term
+                       unification-depth)
           state (-> (assoc state
                       :concepts concepts
                       :atom-index atom-index
@@ -113,20 +133,28 @@
   [state term depth]
   (let [atom-index (:atom-index state)
         concepts (:concepts state)
-        exact (when-let [c (get concepts term)] [c])
-        ;; Collect atom IDs from first `depth` non-zero positions
-        atoms-to-check (loop [i 0 n 0 result []]
-                         (if (or (>= i term/compound-term-size-max) (>= n depth))
-                           result
-                           (let [id (get term i)]
-                             (if (pos? id)
-                               (recur (inc i) (inc n) (conj result id))
-                               (recur (inc i) n result)))))
-        related-keys (into #{}
-                       (mapcat #(get atom-index %))
-                       atoms-to-check)
-        related (keep #(get concepts %) related-keys)]
-    (distinct (concat exact related))))
+        limit (min (max 0 (long depth)) term/compound-term-size-max)
+        exact (get concepts term)
+        seen0 (if exact #{(:id exact)} #{})
+        acc0 (if exact [exact] [])]
+    (second
+      (loop [i 0 seen seen0 acc acc0]
+        (if (>= i limit)
+          [seen acc]
+          (let [atom-id (get term i)]
+            (if (pos? atom-id)
+              (let [[seen acc]
+                    (reduce
+                      (fn [[seen acc] term-key]
+                        (if-let [c (get concepts term-key)]
+                          (if (contains? seen (:id c))
+                            [seen acc]
+                            [(conj seen (:id c)) (conj acc c)])
+                          [seen acc]))
+                      [seen acc]
+                      (get atom-index atom-id))]
+                (recur (inc i) seen acc))
+              (recur (inc i) seen acc))))))))
 
 (defn get-operation-id
   "Get the operation ID for an operation term. Returns 0 if not found."

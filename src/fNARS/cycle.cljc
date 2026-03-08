@@ -1214,36 +1214,34 @@
       (let [current-time (:current-time state)]
         (reduce
           (fn [state [_postc-term postc]]
-            (let [imp-links (:implication-links postc)
-                  items (when imp-links (:items imp-links))]
-              (if (or (nil? items) (empty? items))
-                state
-                ;; Process implications, limiting declarative ones to top-k
-                (loop [remaining (seq items)
-                       state state
-                       decl-count 0]
-                  (if-not remaining
-                    state
-                    (let [imp (first remaining)
-                          is-decl? (== (term/term-root (:term imp)) term/implication)
-                          state (-> state
-                                    (perf-inc :decl-implications-scanned)
-                                    (cond-> is-decl? (perf-inc :decl-implications-declarative)))]
-                      (if (or (and is-decl? (>= decl-count top-k-declarative-implications))
-                              (budget-exhausted? state :decl-implications-left))
-                        (recur (next remaining)
-                               (-> state
-                                   (cond-> (and is-decl? (>= decl-count top-k-declarative-implications))
-                                     (perf-inc :decl-implications-skipped-topk))
-                                   (cond-> (budget-exhausted? state :decl-implications-left)
-                                     (perf-inc :decl-implications-skipped-budget)))
-                               decl-count)
-                        (recur (next remaining)
-                               (-> state
-                                   (budget-consume :decl-implications-left 1)
-                                   (perf-inc :decl-implications-processed)
-                                   (process-declarative-implication imp current-time config))
-                               (if is-decl? (inc decl-count) decl-count)))))))))
+            (if (budget-exhausted? state :decl-implications-left)
+              (reduced state)
+              (let [items (some-> postc :implication-links :items)]
+                (if (seq items)
+                  ;; Process implications, limiting declarative ones to top-k.
+                  ;; Stop immediately once the per-cycle implication budget is exhausted.
+                  (loop [remaining (seq items)
+                         state state
+                         decl-count 0]
+                    (if (or (nil? remaining)
+                            (budget-exhausted? state :decl-implications-left))
+                      state
+                      (let [imp (first remaining)
+                            is-decl? (== (term/term-root (:term imp)) term/implication)
+                            state (-> state
+                                      (perf-inc :decl-implications-scanned)
+                                      (cond-> is-decl? (perf-inc :decl-implications-declarative)))]
+                        (if (and is-decl? (>= decl-count top-k-declarative-implications))
+                          (recur (next remaining)
+                                 (perf-inc state :decl-implications-skipped-topk)
+                                 decl-count)
+                          (recur (next remaining)
+                                 (-> state
+                                     (budget-consume :decl-implications-left 1)
+                                     (perf-inc :decl-implications-processed)
+                                     (process-declarative-implication imp current-time config))
+                                 (if is-decl? (inc decl-count) decl-count))))))
+                  state))))
           state
           (:concepts state))))))
 

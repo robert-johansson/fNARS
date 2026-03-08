@@ -71,9 +71,9 @@
    :nop-subgoaling                  true
    :restricted-concept-creation     false
    :declarative-implications-cycle-process true
-   :declarative-implication-budget-per-cycle 150
-   :declarative-candidate-budget-per-cycle   5000
-   :declarative-unification-budget-per-cycle 4000
+   :declarative-implication-budget-per-cycle 12
+   :declarative-candidate-budget-per-cycle   60
+   :declarative-unification-budget-per-cycle 45
 
    ;; Occurrence time index
    :occurrence-time-index-size      512

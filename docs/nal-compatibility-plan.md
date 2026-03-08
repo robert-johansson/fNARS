@@ -111,14 +111,27 @@ Progress:
   - exposed runner flags for tuning:
     `--decl-implication-budget`, `--decl-candidate-budget`,
     `--decl-unification-budget`.
+- Continued step 3 (third pass):
+  - aligned inverted-atom index behavior with ONA:
+    - index/update only first `unification-depth` term slots
+    - preserve insertion order for related-concept traversal
+    - deterministic/ordered related-concept retrieval without global sorting
+  - declarative implication loop now short-circuits immediately when
+    implication budget is exhausted (no full-table scan after budget hit).
+  - tuned default declarative budgets to:
+    - `:declarative-implication-budget-per-cycle 12`
+    - `:declarative-candidate-budget-per-cycle 60`
+    - `:declarative-unification-budget-per-cycle 45`
 
 Measured impact:
 
-- `threelegdog.nal` went from timing out at `90s` to completing in `18.65s`
-  under current defaults.
-- correctness status is unchanged for this file (`4/5` checks; missing
-  `<(animal * 2) --> has_leg>` answer), so remaining gap is semantic, not
-  timeout-driven.
+- `threelegdog.nal` (default config) improved from ~`29.3s` to ~`7.7s`.
+- correctness for `threelegdog.nal` is now `5/5` (the previously missing
+  `<(animal * 2) --> has_leg>` answer is present).
+- bounded sample set with defaults now passes:
+  - `avoid3.nal` ~`2.4s`
+  - `penguin.nal` ~`4.9s`
+  - `threelegdog.nal` ~`7.7s`
 
 ## Strategy
 
