@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { spawn } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { readFileSync } from "fs";
 import { z } from "zod";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -143,6 +144,45 @@ server.tool(
   async ({ command }) => {
     const result = await sendToNAR(command);
     return { content: [{ type: "text", text: result || "(configured)" }] };
+  }
+);
+
+server.tool(
+  "load_nal_file",
+  "Load and run a .nal file through ONA, returning the full output",
+  {
+    filepath: z
+      .string()
+      .describe("Path to the .nal file (relative to project root or absolute)"),
+  },
+  async ({ filepath }) => {
+    // Reset ONA first
+    startNAR();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const projectRoot = resolve(__dirname, "../..");
+    const fullPath = filepath.startsWith("/")
+      ? filepath
+      : resolve(projectRoot, filepath);
+    const content = readFileSync(fullPath, "utf8");
+    const lines = content.split("\n");
+    const allOutput = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("//")) {
+        // Pass through comments for context
+        if (trimmed.startsWith("//expected:") || trimmed.startsWith("//--expected:")) {
+          allOutput.push(trimmed);
+        }
+        continue;
+      }
+      const result = await sendToNAR(trimmed);
+      if (result) allOutput.push(result);
+    }
+    return {
+      content: [{ type: "text", text: allOutput.join("\n") || "(no output)" }],
+    };
   }
 );
 

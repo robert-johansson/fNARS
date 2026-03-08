@@ -22,13 +22,19 @@
           | binary-compound
           | negation | ext-set | int-set | operation | atom
    statement = <'<'> <ws>? term <ws> copula <ws> term <ws>? <'>'>
+             | <'('> <ws>? term <ws> copula <ws> term <ws>? <')'>
    copula = '-->' | '<->' | '|->'\n       | '=/>' | '==>' | '<=>'
    sequence = <'(&/'> (<ws> term)+ <ws>? <')'>
+            | <'(&/,'> (<ws>? term <','>)* <ws>? term <ws>? <')'>
    conjunction = <'(&&'> (<ws> term)+ <ws>? <')'>
+               | <'(&&,'> (<ws>? term <','>)* <ws>? term <ws>? <')'>
    disjunction = <'(||'> (<ws> term)+ <ws>? <')'>
    binary-compound = <'('> <ws>? term <ws> compound-op <ws> term <ws>? <')'>
                    | <'(*'> <ws> term <ws> term <ws>? <')'>
-   <compound-op> = product-op | ext-intersection-op | int-intersection-op
+                   | <'(*,'> <ws>? term <','> <ws>? term <ws>? <')'>
+                   | <'('> <ws>? term <ws> term <ws>? <')'>
+   <compound-op> = sequence-op | conjunction-op | parallel-conjunction-op | disjunction-op
+                 | product-op | ext-intersection-op | int-intersection-op
                  | ext-difference-op | int-difference-op
                  | ext-image1-op | ext-image2-op | int-image1-op | int-image2-op
    product-op = '*'
@@ -36,19 +42,24 @@
    int-intersection-op = '|'
    ext-difference-op = '-'
    int-difference-op = '~'
+   sequence-op = '&/'
+   conjunction-op = '&&'
+   parallel-conjunction-op = '&|'
+   disjunction-op = '||'
    ext-image1-op = '/1'
    ext-image2-op = '/2'
    int-image1-op = '\\\\1'
    int-image2-op = '\\\\2'
-   negation = <'(--'> <ws> term <ws>? <')'>
+   negation = <'(--'> <ws> term <ws>? <')'> | <'(!'> <ws> term <ws>? <')'>
    ext-set = <'{'> <ws>? term (<ws> term)* <ws>? <'}'>
    int-set = <'['> <ws>? term (<ws> term)* <ws>? <']'>
    operation = <'('> operator <')'>
    operator = #'\\^[a-zA-Z_][a-zA-Z0-9_]*'
-   atom = variable | symbol-atom | word | operator
+   atom = variable | symbol-atom | word | num-atom | operator
    variable = #'[\\$#\\?][a-zA-Z0-9]+'
    symbol-atom = '+' | '='
-   word = #'[a-zA-Z][a-zA-Z0-9_]*'
+   word = #'[a-zA-Z][a-zA-Z0-9_]*(?:\\.[0-9][a-zA-Z0-9_.]*)*'
+   num-atom = #'[0-9][a-zA-Z0-9_]*(?:\\.[0-9][a-zA-Z0-9_.]*)*'
    number = #'-?[0-9]+\\.?[0-9]*'
    <ws> = #'\\s+'")
 
@@ -165,6 +176,10 @@
    :ext-image2-op (constantly term/ext-image2)
    :int-image1-op (constantly term/int-image1)
    :int-image2-op (constantly term/int-image2)
+   :sequence-op (constantly term/sequence*)
+   :conjunction-op (constantly term/conjunction)
+   :parallel-conjunction-op (constantly term/conjunction) ;; &| treated as &&
+   :disjunction-op (constantly term/disjunction)
    :negation (fn [child]
                (-> (term/atomic-term term/negation)
                    (term/override-subterm 1 child)))
@@ -177,7 +192,8 @@
    :operator (fn [s] (term/atomic-term (keyword s)))
    :atom identity
    :variable (fn [s] (term/atomic-term (keyword s)))
-   :word (fn [s] (term/atomic-term (keyword s)))})
+   :word (fn [s] (term/atomic-term (keyword s)))
+   :num-atom (fn [s] (term/atomic-term (keyword s)))})
 
 ;; -- Public API --
 
