@@ -389,9 +389,12 @@
     (r2 [:equiv :M :P] [:equiv :S :M] [:equiv :S :P] :resemblance)
     ;; Equivalence -> implication
     (r1 [:equiv :M :P] [:impl :M :P] :structural-deduction)
-    (r1 [:equiv :M :P] [:impl :P :M] :structural-deduction)
-    ;; Higher-order decomposition (only at NAL level 5, not 6+)
-    ;; These are handled by Cycle_SpecialInferences in ONA when level >= 6
+    (r1 [:equiv :M :P] [:impl :P :M] :structural-deduction))))
+
+;; Higher-order decomposition: only in rule table at NAL level == 5.
+;; At level >= 6, these move to Cycle_SpecialInferences (with variable elimination).
+(def nal-5-only-rules
+  (vec (concat
     (r2 [:A] [:impl :A :B] [:B] :deduction)
     (r2 [:A] [:impl [:conj :A :B] :C] [:impl :B :C] :deduction)
     (r2 [:B] [:impl :A :B] [:A] :abduction)
@@ -440,7 +443,9 @@
 ;; -- Combined Rule Table --
 
 (defn rules-for-level
-  "Get all rules up to the given NAL level."
+  "Get all rules up to the given NAL level.
+   At level 5, includes HOL decomposition rules in the rule table.
+   At level 6+, those rules move to Cycle_SpecialInferences."
   [level]
   (cond-> []
     (>= level 1) (into nal-1-rules)
@@ -448,6 +453,7 @@
     (>= level 3) (into nal-3-rules)
     (>= level 4) (into nal-4-rules)
     (>= level 5) (into nal-5-rules)
+    (== level 5) (into nal-5-only-rules)
     (>= level 6) (into nal-6-rules)))
 
 ;; -- Rule Application --

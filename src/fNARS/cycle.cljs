@@ -71,18 +71,132 @@
   [concept event-occurrence config]
   (let [eternal (:belief concept)
         spike (:belief-spike concept)
-        use-spike? (and (not (event/event-deleted? spike))
-                        (not= event-occurrence truth/occurrence-eternal)
-                        (< (js/Math.abs (- event-occurrence (:occurrence-time spike)))
-                           (:event-belief-distance config)))
+        spike-ok? (and (not (event/event-deleted? spike))
+                       (not= (:occurrence-time spike) truth/occurrence-eternal))
+        ;; When selected event is temporal, prefer spike within EVENT_BELIEF_DISTANCE.
+        ;; When selected event is eternal, still allow spike (better confidence).
+        use-spike? (and spike-ok?
+                        (or (= event-occurrence truth/occurrence-eternal)
+                            (< (js/Math.abs (- event-occurrence (:occurrence-time spike)))
+                               (:event-belief-distance config))))
         belief (if use-spike?
-                 (assoc spike :truth
-                   (truth/truth-projection (:truth spike)
-                     (:occurrence-time spike) event-occurrence
-                     (:projection-decay config)))
+                 (if (= event-occurrence truth/occurrence-eternal)
+                   spike ;; no projection needed, conclusion will be eternal
+                   (assoc spike :truth
+                     (truth/truth-projection (:truth spike)
+                       (:occurrence-time spike) event-occurrence
+                       (:projection-decay config))))
                  eternal)]
     (when (and belief (not (event/event-deleted? belief)))
-      {:belief belief :eternalize? (not use-spike?)})))
+      {:belief belief :eternalize? (or (not use-spike?)
+                                       (= event-occurrence truth/occurrence-eternal))})))
+
+(defn- try-derive-special
+  "Try to derive a conclusion from special inference. Adds to state if valid."
+  [state conclusion-term conclusion-truth conclusion-stamp conclusion-occ
+   parent-priority concept-priority eternalize? nal-level]
+  (let [config (:config state)
+        current-time (:current-time state)]
+    (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
+      state
+      (let [derived-ev (event/make-event
+                         {:term conclusion-term
+                          :type event/event-type-belief
+                          :truth conclusion-truth
+                          :stamp conclusion-stamp
+                          :occurrence-time conclusion-occ
+                          :creation-time current-time})
+            der-priority (* parent-priority concept-priority
+                           (truth/truth-expectation conclusion-truth))]
+        (add-derived-belief state derived-ev der-priority eternalize?)))))
+
+(defn- special-inferences
+  "Higher-order decomposition with variable elimination.
+   Matches ONA's Cycle_SpecialInferences (Cycle.c:887-969).
+   At NAL level >= 6, handles:
+   - A, (A ==> B) |- B (Deduction with var elimination)
+   - A, ((A && B) ==> C) |- (B ==> C) (Deduction with remaining condition)
+   - B, (A ==> B) |- A (Abduction with var elimination)
+   - A, (A <=> B) |- B (Analogy with var elimination)
+   - A, (A && B) |- B (Anonymous analogy with dep var elimination)"
+  [state term1 term2 truth1 truth2
+   conclusion-stamp conclusion-occ parent-priority concept-priority eternalize?]
+  (let [config (:config state)
+        nal-level (:semantic-inference-nal-level config)
+        root2 (term/term-root term2)
+        is-impl? (= root2 term/implication)
+        is-equiv? (= root2 term/equivalence)]
+    (cond-> state
+      ;; Implication or equivalence rules
+      (or is-impl? is-equiv?)
+      (as-> state
+        (let [impl-subject (term/extract-subterm term2 1)
+              impl-predicate (term/extract-subterm term2 2)
+              ;; Deduction/Analogy: unify subject with term1
+              subj-subs (variable/unify impl-subject term1)
+              state (if (:success subj-subs)
+                      (let [conclusion-term (variable/apply-substitute
+                                              impl-predicate (:substitution subj-subs))
+                            conclusion-truth (if is-impl?
+                                               (truth/truth-deduction truth2 truth1)
+                                               (truth/truth-analogy truth2 truth1))]
+                        (try-derive-special state conclusion-term conclusion-truth
+                          conclusion-stamp conclusion-occ parent-priority concept-priority
+                          eternalize? nal-level))
+                      state)
+              ;; Deduction with remaining condition:
+              ;; (A && B) ==> C, match A with term1 → (B ==> C)
+              state (if (and is-impl? (= (term/term-root impl-subject) term/conjunction))
+                      (let [conj-left (term/extract-subterm impl-subject 1)
+                            conj-right (term/extract-subterm impl-subject 2)
+                            ;; Try left component first
+                            subs1 (variable/unify conj-left term1)
+                            [subs remaining] (if (:success subs1)
+                                               [subs1 conj-right]
+                                               ;; Try right component
+                                               [(variable/unify conj-right term1) conj-left])]
+                        (if (:success subs)
+                          (let [conclusion-term (-> (term/atomic-term term/implication)
+                                                   (term/override-subterm 1 remaining)
+                                                   (term/override-subterm 2 impl-predicate))
+                                conclusion-term (variable/apply-substitute
+                                                  conclusion-term (:substitution subs))
+                                conclusion-truth (truth/truth-deduction truth2 truth1)]
+                            (try-derive-special state conclusion-term conclusion-truth
+                              conclusion-stamp conclusion-occ parent-priority concept-priority
+                              eternalize? nal-level))
+                          state))
+                      state)
+              ;; Abduction: unify predicate with term1
+              pred-subs (variable/unify impl-predicate term1)
+              state (if (:success pred-subs)
+                      (let [conclusion-term (variable/apply-substitute
+                                              impl-subject (:substitution pred-subs))
+                            conclusion-truth (if is-impl?
+                                               (truth/truth-abduction truth2 truth1
+                                                 (:horizon config))
+                                               (truth/truth-analogy truth2 truth1))]
+                        (try-derive-special state conclusion-term conclusion-truth
+                          conclusion-stamp conclusion-occ parent-priority concept-priority
+                          eternalize? nal-level))
+                      state)]
+          state))
+
+      ;; Conjunction: anonymous analogy with dep var elimination
+      (= root2 term/conjunction)
+      (as-> state
+        (let [conj-subject (term/extract-subterm term2 1)
+              conj-predicate (term/extract-subterm term2 2)
+              subj-subs (variable/unify conj-subject term1)]
+          (if (:success subj-subs)
+            (let [conclusion-term (variable/apply-substitute
+                                    conj-predicate (:substitution subj-subs))
+                  conclusion-truth (truth/truth-anonymous-analogy truth2 truth1
+                                    (:horizon config))]
+              (try-derive-special state conclusion-term conclusion-truth
+                conclusion-stamp conclusion-occ parent-priority concept-priority
+                eternalize? nal-level))
+            state))))))
 
 (defn- cycle-inference
   "Run declarative NAL 1-5 inference for a selected belief event.
@@ -122,7 +236,7 @@
                     state
                     (rule-table/apply-rules rules term1 term/empty-term
                       truth1 truth/default-truth config false))
-            ;; Double-premise inference (R2 rules)
+            ;; Double-premise inference (R2 rules + special inferences)
             related (memory/related-concepts state term1 (:unification-depth config))
             state (reduce
                     (fn [state related-concept]
@@ -134,26 +248,38 @@
                               conclusion-occ (if eternalize? truth/occurrence-eternal occ1)]
                           (if (stamp/stamp-overlap? (:stamp ev) (:stamp belief))
                             state
-                            (reduce
-                              (fn [state derivation]
-                                (let [conclusion-term (rule-table/reduce-conclusion (:term derivation))
-                                      conclusion-truth (:truth derivation)]
-                                  (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
-                                    state
-                                    (let [derived-ev (event/make-event
-                                                      {:term conclusion-term
-                                                       :type event/event-type-belief
-                                                       :truth conclusion-truth
-                                                       :stamp conclusion-stamp
-                                                       :occurrence-time conclusion-occ
-                                                       :creation-time current-time})
-                                          der-priority (* priority
-                                                         (:priority related-concept 0.5)
-                                                         (truth/truth-expectation conclusion-truth))]
-                                      (add-derived-belief state derived-ev der-priority eternalize?)))))
-                              state
-                              (rule-table/apply-rules rules term1 term2
-                                truth1 truth2 config true))))
+                            (let [;; Apply rule table
+                                  state (reduce
+                                          (fn [state derivation]
+                                            (let [conclusion-term (rule-table/reduce-conclusion (:term derivation))
+                                                  conclusion-truth (:truth derivation)]
+                                              (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
+                                                state
+                                                (let [derived-ev (event/make-event
+                                                                  {:term conclusion-term
+                                                                   :type event/event-type-belief
+                                                                   :truth conclusion-truth
+                                                                   :stamp conclusion-stamp
+                                                                   :occurrence-time conclusion-occ
+                                                                   :creation-time current-time})
+                                                      der-priority (* priority
+                                                                     (:priority related-concept 0.5)
+                                                                     (truth/truth-expectation conclusion-truth))]
+                                                  (add-derived-belief state derived-ev der-priority eternalize?)))))
+                                          state
+                                          (rule-table/apply-rules rules term1 term2
+                                            truth1 truth2 config true))
+                                  ;; Special inferences (NAL 6+): both term orderings
+                                  state (if (>= nal-level 6)
+                                          (-> state
+                                              (special-inferences term1 term2 truth1 truth2
+                                                conclusion-stamp conclusion-occ priority
+                                                (:priority related-concept 0.5) eternalize?)
+                                              (special-inferences term2 term1 truth2 truth1
+                                                conclusion-stamp conclusion-occ priority
+                                                (:priority related-concept 0.5) eternalize?))
+                                          state)]
+                              state)))
                         state))
                     state
                     related)]
