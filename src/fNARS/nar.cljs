@@ -267,6 +267,10 @@
                      is-any-imp?
                      (search-implications concept term)
 
+                     ;; For non-temporal implications, also check eternal belief directly
+                     is-non-temporal-imp?
+                     (search-eternal-belief concept)
+
                      (and (not is-any-imp?) (not= tense :eternal))
                      (search-temporal-belief concept tense current-time config)
 

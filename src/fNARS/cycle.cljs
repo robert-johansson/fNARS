@@ -251,7 +251,13 @@
                             (let [;; Apply rule table
                                   state (reduce
                                           (fn [state derivation]
-                                            (let [conclusion-term (rule-table/reduce-conclusion (:term derivation))
+                                            (let [raw-term (rule-table/reduce-conclusion (:term derivation))
+                                                  ;; Variable introduction: replace shared atoms with variables
+                                                  conclusion-term (if (:var-intro? derivation)
+                                                                    (let [{:keys [term success?]}
+                                                                          (variable/introduce-implication-variables raw-term)]
+                                                                      (if success? term raw-term))
+                                                                    raw-term)
                                                   conclusion-truth (:truth derivation)]
                                               (if-not (rule-table/valid-conclusion? conclusion-term nal-level)
                                                 state
