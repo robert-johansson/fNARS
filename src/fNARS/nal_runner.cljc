@@ -4,6 +4,7 @@
   (:require [fNARS.nar :as nar]
             [fNARS.nar-config :as nar-config]
             [fNARS.parser :as parser]
+            [fNARS.cycle :as cycle]
             [fNARS.shell :as shell]
             [fNARS.platform :as p]
             [clojure.string :as str]))
@@ -131,13 +132,14 @@
 
 ;; -- Main runner --
 
-(defn run-nal-file [filepath & [{:keys [tolerance verbose nal-level]
-                                  :or {tolerance 0.05 verbose false nal-level 6}}]]
+(defn run-nal-file [filepath & [{:keys [tolerance verbose nal-level perf?]
+                                  :or {tolerance 0.05 verbose false nal-level 6 perf? false}}]]
   (let [content (p/slurp-file filepath)
         lines (str/split-lines content)
         config (assoc nar-config/default-config
                  :semantic-inference-nal-level nal-level
-                 :motor-babbling-chance 0.0)]
+                 :motor-babbling-chance 0.0
+                 :perf-instrumentation perf?)]
     (println (str "=== Running: " filepath " ===\n"))
     (loop [state (nar/nar-init config)
            remaining lines
@@ -154,6 +156,9 @@
               (println (if (:pass r) "  PASS" "  FAIL") (:desc r))
               (when-not (:pass r)
                 (println "       " (:reason r)))))
+          (when perf?
+            (println "\nPerf summary:")
+            (println (pr-str (cycle/perf-summary state))))
           (println (str "\n" (count passed) "/" (count checks) " checks passed"))
           {:passed (count passed) :total (count checks) :failed (count failed)})
 
@@ -203,10 +208,17 @@
 
 (defn -main [& args]
   (if (empty? args)
-    (println "Usage: bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.nal-runner <file.nal> [--verbose] [--tolerance 0.05]")
+    (println "Usage: bunx --bun nbb -cp src:lib/instaparse/src -m fNARS.nal-runner <file.nal> [--verbose] [--perf] [--nal-level 6] [--tolerance 0.05]")
     (let [filepath (first args)
           verbose (some #(= % "--verbose") args)
+          perf? (some #(= % "--perf") args)
+          level-idx (some (fn [i] (when (= (nth args i) "--nal-level") (inc i)))
+                          (range (count args)))
+          nal-level (if level-idx (p/parse-int (nth args level-idx)) 6)
           tol-idx (some (fn [i] (when (= (nth args i) "--tolerance") (inc i)))
                         (range (count args)))
           tolerance (if tol-idx (p/parse-float (nth args tol-idx)) 0.05)]
-      (run-nal-file filepath {:verbose verbose :tolerance tolerance}))))
+      (run-nal-file filepath {:verbose verbose
+                              :perf? perf?
+                              :nal-level nal-level
+                              :tolerance tolerance}))))

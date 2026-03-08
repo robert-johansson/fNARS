@@ -48,6 +48,12 @@
   nal:compat {:doc  "Run ONA vs fNARS compatibility checks over .nal examples"
               :task (load-file "scripts/nal_compat.clj")}
 
+  nal:perf {:doc "Run bounded compatibility/performance samples (90s timeout)"
+            :task (do
+                    (shell "bb scripts/nal_compat.clj --file avoid3.nal --verbose --timeout-sec 90")
+                    (shell "bb scripts/nal_compat.clj --file penguin.nal --verbose --timeout-sec 90")
+                    (shell "bb scripts/nal_compat.clj --file threelegdog.nal --verbose --timeout-sec 90"))}
+
   build:shadow {:doc  "Build shadow-cljs production bundle (target/fnars.js)"
                 :task (shell "npx shadow-cljs release fnars")}
 

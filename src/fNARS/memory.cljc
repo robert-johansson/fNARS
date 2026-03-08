@@ -58,6 +58,16 @@
   [state term]
   (get-in state [:concepts term]))
 
+(defn- perf-enabled?
+  [state]
+  (true? (get-in state [:config :perf-instrumentation])))
+
+(defn- perf-inc
+  [state counter-key]
+  (if (perf-enabled? state)
+    (update-in state [:perf :counters counter-key] (fnil inc 0))
+    state))
+
 (defn conceptualize
   "Find or create a concept for a term.
    Returns [new-state concept]."
@@ -76,17 +86,19 @@
                   worst-key (first worst)
                   worst-concept (second worst)
                   atom-index (remove-from-atom-index (:atom-index state) (:term worst-concept))
-                  state (assoc state :atom-index atom-index)
+                  state (-> (assoc state :atom-index atom-index)
+                            (perf-inc :concepts-evicted))
                   concepts (dissoc concepts worst-key)]
               [state concepts])
             [state concepts])
           new-concept (concept/make-concept concept-id term current-time)
           concepts (assoc concepts term new-concept)
           atom-index (add-to-atom-index (:atom-index state) term term)
-          state (assoc state
-                  :concepts concepts
-                  :atom-index atom-index
-                  :next-concept-id (inc concept-id))]
+          state (-> (assoc state
+                      :concepts concepts
+                      :atom-index atom-index
+                      :next-concept-id (inc concept-id))
+                    (perf-inc :concepts-created))]
       [state new-concept])))
 
 (defn update-concept

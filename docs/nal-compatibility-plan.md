@@ -62,6 +62,50 @@ Update:
   - `Answer: ... :|: occurrenceTime=... Truth: ...`
   - `<term>. Truth: ...` lines without `Answer:`
 
+## Performance Gap Plan (2026-03-08)
+
+Problem measured:
+
+- `threelegdog.nal` takes about `0.32s` in ONA and around `246s` in fNARS.
+- Sampled profiling shows most time in `cycle/declarative-anticipate`.
+- fNARS concept growth is much higher than ONA on the same sampled input.
+
+Execution plan:
+
+1. Keep runner/harness bounded:
+   - Add per-run timeout support to `bb nal:compat`.
+   - Add a small `bb nal:perf` sample task to catch regressions quickly.
+2. Add built-in profiling counters:
+   - phase timing in `cycle-perform`
+   - declarative anticipation counters (implications scanned, unifications attempted/succeeded)
+   - concept creation/eviction counters.
+3. Optimize declarative anticipation first:
+   - reduce search space for precondition matching using indexed candidates
+   - keep exact unification for correctness
+   - enforce explicit per-cycle work budgets.
+4. Reduce concept explosion pressure:
+   - identify dominant derivation sources
+   - tighten conclusion gating where safe and ONA-consistent.
+5. Verify each optimization step:
+   - keep parity checks on key files
+   - track runtime targets for `threelegdog.nal`: `<60s`, `<15s`, `<5s`.
+
+Progress:
+
+- Implemented step 1:
+  - `bb nal:compat` now supports `--timeout-sec` (default `90`).
+  - table output now includes per-engine elapsed seconds.
+  - new `bb nal:perf` task runs bounded sample files.
+- Implemented step 2:
+  - `:perf-instrumentation` config flag added.
+  - phase timing in `cycle-perform`.
+  - counters for declarative anticipation scans/unifications.
+  - concept create/evict counters in memory.
+  - `nal-runner --perf` prints a perf summary.
+- Started step 3 (first pass):
+  - declarative precondition matching now uses indexed related-concept candidates
+    when the implication precondition contains concrete atoms, with full-scan fallback.
+
 ## Strategy
 
 Do not start by rewriting the inference engine.

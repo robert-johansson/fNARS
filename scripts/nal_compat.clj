@@ -2,7 +2,7 @@
 
 (ns nal-compat
   (:require [babashka.fs :as fs]
-            [clojure.java.shell :as sh]
+            [babashka.process :as proc]
             [clojure.string :as str]))
 
 (def examples-dir "OpenNARS-for-Applications/examples/nal")
@@ -11,10 +11,10 @@
   ["bunx" "--bun" "nbb" "-cp" "src:lib/instaparse/src" "-m" "fNARS.nal-runner"])
 
 (defn usage []
-  (println "Usage: bb nal:compat [--limit N] [--file NAME_OR_PATH] [--include-space] [--verbose]"))
+  (println "Usage: bb nal:compat [--limit N] [--file NAME_OR_PATH (repeatable)] [--include-space] [--timeout-sec N] [--verbose]"))
 
 (defn parse-args [args]
-  (loop [args args opts {:limit nil :file nil :include-space? false :verbose? false}]
+  (loop [args args opts {:limit nil :files [] :include-space? false :verbose? false :timeout-sec 90}]
     (if (empty? args)
       opts
       (let [a (first args)
@@ -24,9 +24,12 @@
                       (recur (rest more) (assoc opts :limit (parse-long n)))
                       (do (println "Missing value for --limit") (System/exit 1)))
           "--file" (if-let [f (first more)]
-                     (recur (rest more) (assoc opts :file f))
+                     (recur (rest more) (update opts :files conj f))
                      (do (println "Missing value for --file") (System/exit 1)))
           "--include-space" (recur more (assoc opts :include-space? true))
+          "--timeout-sec" (if-let [n (first more)]
+                            (recur (rest more) (assoc opts :timeout-sec (parse-long n)))
+                            (do (println "Missing value for --timeout-sec") (System/exit 1)))
           "--verbose" (recur more (assoc opts :verbose? true))
           "--help" (do (usage) (System/exit 0))
           (do
@@ -42,17 +45,21 @@
       (and (not include-space?)
            (str/includes? content "*space"))))
 
-(defn list-nal-files [{:keys [file limit include-space?]}]
+(defn list-nal-files [{:keys [files limit include-space?]}]
   (let [all-files (->> (fs/glob examples-dir "*.nal")
                        (map str)
                        sort)
         filtered
         (cond
-          file
-          (filter #(or (= % file)
-                       (= (fs/file-name %) file)
-                       (str/includes? % file))
-                  all-files)
+          (seq files)
+          (filter
+            (fn [path]
+              (some (fn [f]
+                      (or (= path f)
+                          (= (fs/file-name path) f)
+                          (str/includes? path f)))
+                    files))
+            all-files)
 
           :else
           (remove (fn [f] (has-blocked-cmd? (read-file f) include-space?)) all-files))
@@ -94,20 +101,45 @@
 (defn sh-quote [s]
   (str "'" (str/replace s "'" "'\"'\"'") "'"))
 
-(defn run-cmd [{:keys [cmd cwd]}]
-  (let [{:keys [exit out err]}
-        (sh/sh "bash" "-lc" cmd :dir (or cwd "."))]
-    {:exit exit
-     :out (or out "")
-     :err (or err "")}))
+(defn run-cmd [{:keys [cmd cwd timeout-sec]}]
+  (let [started (System/nanoTime)
+        p (proc/process ["bash" "-lc" cmd]
+            {:dir (or cwd ".")
+             :out :string
+             :err :string})
+        result-fut (future @p)
+        timeout-ms (* 1000 (max 1 (or timeout-sec 90)))
+        result (deref result-fut timeout-ms ::timeout)
+        duration-ms (/ (- (System/nanoTime) started) 1000000.0)]
+    (if (= result ::timeout)
+      (do
+        (try
+          (proc/destroy-tree p)
+          (catch Throwable _
+            (try
+              (when-let [proc-handle (:proc p)]
+                (.destroy proc-handle))
+              (catch Throwable _))))
+        {:exit 124
+         :timed-out? true
+         :out ""
+         :err (str "Timed out after " timeout-sec "s")
+         :duration-ms duration-ms})
+      (assoc result
+        :timed-out? false
+        :out (or (:out result) "")
+        :err (or (:err result) "")
+        :duration-ms duration-ms))))
 
-(defn run-ona [file]
+(defn run-ona [file timeout-sec]
   (run-cmd {:cmd (str ona-bin " shell < " (sh-quote file))
-            :cwd "."}))
+            :cwd "."
+            :timeout-sec timeout-sec}))
 
-(defn run-fnars [file]
+(defn run-fnars [file timeout-sec]
   (run-cmd {:cmd (str/join " " (concat fnars-cmd [file]))
-            :cwd "."}))
+            :cwd "."
+            :timeout-sec timeout-sec}))
 
 (defn output-has-execution? [output op]
   (or (str/includes? output (str op " executed with args"))
@@ -164,17 +196,36 @@
     ;; Fallback when summary is not present
     (evaluate output items)))
 
-(defn summarize-row [{:keys [file items ona fnars]}]
+(defn- failed-run-eval [label run items timeout-sec]
+  {:pass? false
+   :passed 0
+   :total (count items)
+   :failed [(if (:timed-out? run)
+              (str label " timed out after " timeout-sec "s")
+              (str label " exited " (:exit run)
+                   (when-let [e (seq (str/trim (:err run)))]
+                     (str ": " e))))]})
+
+(defn- run->eval [label run items timeout-sec evaluate-fn]
+  (if (zero? (:exit run))
+    (evaluate-fn (:out run) items)
+    (failed-run-eval label run items timeout-sec)))
+
+(defn summarize-row [{:keys [file items ona fnars ona-run fnars-run]}]
   {:file file
    :checks (count items)
    :ona (if (:pass? ona) "PASS" "FAIL")
-   :fnars (if (:pass? fnars) "PASS" "FAIL")})
+   :fnars (if (:pass? fnars) "PASS" "FAIL")
+   :ona-seconds (/ (:duration-ms ona-run 0.0) 1000.0)
+   :fnars-seconds (/ (:duration-ms fnars-run 0.0) 1000.0)})
 
 (defn print-table [rows]
-  (println "| File | Checks | ONA | fNARS |")
-  (println "| --- | ---: | :---: | :---: |")
-  (doseq [{:keys [file checks ona fnars]} rows]
-    (println (str "| " (fs/file-name file) " | " checks " | " ona " | " fnars " |"))))
+  (println "| File | Checks | ONA | fNARS | ONA s | fNARS s |")
+  (println "| --- | ---: | :---: | :---: | ---: | ---: |")
+  (doseq [{:keys [file checks ona fnars ona-seconds fnars-seconds]} rows]
+    (println (str "| " (fs/file-name file) " | " checks " | " ona " | " fnars
+                  " | " (format "%.2f" ona-seconds)
+                  " | " (format "%.2f" fnars-seconds) " |"))))
 
 (defn -main [& args]
   (let [opts (parse-args args)
@@ -184,24 +235,29 @@
       (System/exit 1))
     (println "Running compatibility checks on" (count files) "files")
     (println "Excluded commands: *setvalue" (if (:include-space? opts) "" "and *space"))
+    (println "Timeout per engine run:" (:timeout-sec opts) "seconds")
     (println)
     (let [results
           (mapv
             (fn [f]
               (let [content (slurp f)
                     items (expected-items content)
-                    ona-run (run-ona f)
-                    fnars-run (run-fnars f)
-                    ona-eval (evaluate (:out ona-run) items)
-                    fnars-eval (evaluate-fnars (:out fnars-run) items)]
+                    ona-run (run-ona f (:timeout-sec opts))
+                    fnars-run (run-fnars f (:timeout-sec opts))
+                    ona-eval (run->eval "ONA" ona-run items (:timeout-sec opts) evaluate)
+                    fnars-eval (run->eval "fNARS" fnars-run items (:timeout-sec opts) evaluate-fnars)]
                 (when (:verbose? opts)
-                  (println (format "%-36s checks=%-3d ONA=%s fNARS=%s"
+                  (println (format "%-36s checks=%-3d ONA=%s(%.2fs) fNARS=%s(%.2fs)"
                                    (fs/file-name f)
                                    (count items)
                                    (if (:pass? ona-eval) "PASS" "FAIL")
-                                   (if (:pass? fnars-eval) "PASS" "FAIL"))))
+                                   (/ (:duration-ms ona-run 0.0) 1000.0)
+                                   (if (:pass? fnars-eval) "PASS" "FAIL")
+                                   (/ (:duration-ms fnars-run 0.0) 1000.0))))
                 {:file f
                  :items items
+                 :ona-run ona-run
+                 :fnars-run fnars-run
                  :ona ona-eval
                  :fnars fnars-eval}))
             files)

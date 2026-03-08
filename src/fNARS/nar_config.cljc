@@ -82,4 +82,7 @@
    ;; Output
    :volume                          100
    :print-derivations               false
-   :print-input                     true})
+   :print-input                     true
+
+   ;; Profiling/debug instrumentation
+   :perf-instrumentation            false})

@@ -15,10 +15,55 @@
             [fNARS.table :as table]
             [fNARS.implication :as implication]
             [fNARS.rule-table :as rule-table]
-            [fNARS.platform :as p]))
+            [fNARS.platform :as p]
+            [fNARS.atom-registry :as ar]))
 
 ;; -- Declarative Inference (NAL 1-5) --
 ;; Matches ONA's Cycle_Inference (Cycle.c lines 971-1069).
+
+(defn- now-ns []
+  #?(:clj (System/nanoTime)
+     :cljs (* 1000000.0 (.now js/performance))))
+
+(defn- perf-enabled?
+  [state]
+  (true? (get-in state [:config :perf-instrumentation])))
+
+(defn- perf-inc
+  [state counter-key]
+  (if (perf-enabled? state)
+    (update-in state [:perf :counters counter-key] (fnil inc 0))
+    state))
+
+(defn- perf-add
+  [state counter-key n]
+  (if (and (perf-enabled? state) (pos? n))
+    (update-in state [:perf :counters counter-key] (fnil + 0) n)
+    state))
+
+(defn- timed-phase
+  [state phase-key f]
+  (if-not (perf-enabled? state)
+    (f state)
+    (let [t0 (now-ns)
+          out (f state)
+          dt (- (now-ns) t0)]
+      (-> out
+          (update-in [:perf :phase-times-ns phase-key] (fnil + 0) dt)
+          (update-in [:perf :phase-counts phase-key] (fnil inc 0))))))
+
+(defn- has-concrete-atom?
+  "True when term contains at least one non-variable, non-copula atom."
+  [t]
+  (loop [i 0]
+    (if (>= i term/compound-term-size-max)
+      false
+      (let [id (get t i)]
+        (if (and (pos? id)
+                 (not (ar/copula-id? id))
+                 (not (variable/variable? id)))
+          true
+          (recur (inc i)))))))
 
 (defn- store-derived-implication
   "Store a derived implication in the appropriate table.
@@ -83,7 +128,8 @@
         current-time (:current-time state)]
     (if (< (:confidence (:truth ev)) (:min-confidence config))
       state
-      (let [root (term/term-root (:term ev))
+      (let [state (perf-inc state :derived-beliefs-produced)
+            root (term/term-root (:term ev))
             is-implication? (or (== root term/implication) (== root term/temporal-implication))
             ;; Store implications in tables
             state (if is-implication?
@@ -989,12 +1035,14 @@
                   (let [state (memory/update-concept state result-term
                                 #(assoc % :belief (:event updated)))]
                     ;; Output the derived belief
-                    (update state :output conj
-                      {:type :derived
-                       :term result-term
-                       :truth (:truth (:event updated))
-                       :event-type event/event-type-belief
-                       :occurrence-time truth/occurrence-eternal}))
+                    (-> state
+                        (perf-inc :derived-beliefs-produced)
+                        (update :output conj
+                          {:type :derived
+                           :term result-term
+                           :truth (:truth (:event updated))
+                           :event-type event/event-type-belief
+                           :occurrence-time truth/occurrence-eternal})))
                   state)))))))))
 
 (defn- update-spike-from-declarative
@@ -1044,12 +1092,14 @@
                                     (assoc c :belief (:event r)
                                              ;; Update creation-time for metrics
                                              ))))]
-                    (update state :output conj
-                      {:type :derived
-                       :term result-term
-                       :truth (:truth (:event updated))
-                       :event-type event/event-type-belief
-                       :occurrence-time (:occurrence-time (:event updated))}))
+                    (-> state
+                        (perf-inc :derived-beliefs-produced)
+                        (update :output conj
+                          {:type :derived
+                           :term result-term
+                           :truth (:truth (:event updated))
+                           :event-type event/event-type-belief
+                           :occurrence-time (:occurrence-time (:event updated))})))
                   state))
               state)))))))
 
@@ -1058,54 +1108,66 @@
    preconditions, derive conclusions, update beliefs.
    Matches ONA Decision.c:609-809 inner loop for declarative implications."
   [state imp current-time config]
-  (let [imp-precon (term/extract-subterm (:term imp) 1)]
+  (let [imp-precon (term/extract-subterm (:term imp) 1)
+        related (memory/related-concepts state imp-precon (:unification-depth config))
+        candidates (if (and (has-concrete-atom? imp-precon)
+                            (seq related))
+                     related
+                     (vals (:concepts state)))]
     (reduce
-      (fn [state [concept-term concept]]
+      (fn [state concept]
+        (let [state (perf-inc state :decl-precondition-concepts-scanned)]
         ;; Skip concepts with variables (ONA Decision.c:612-615)
-        (if (variable/has-variable? (:term concept))
-          state
-          (let [prec-eternal (:belief concept)
-                prec-event (:belief-spike concept)
-                ;; BELIEF_LAST_USED_TOLERANCE check (ONA Decision.c:620)
-                skip? (and (< (:creation-time prec-eternal 0) (- current-time belief-last-used-tolerance))
-                           (< (:creation-time prec-event 0) (- current-time belief-last-used-tolerance)))]
-            (if skip?
-              state
-              (let [subs-eternal (when-not (event/event-deleted? prec-eternal)
-                                   (variable/unify imp-precon (:term prec-eternal)))
-                    subs-event (when-not (event/event-deleted? prec-event)
-                                 (variable/unify imp-precon (:term prec-event)))]
-                (if-not (or (:success subs-eternal) (:success subs-event))
-                  state
-                  (let [;; Derive conclusions
-                        result-eternal (when (and (:success subs-eternal)
-                                                   (not (event/event-deleted? prec-eternal)))
-                                         (inference/belief-deduction prec-eternal imp))
-                        result-event (when (and (:success subs-event)
-                                                 (not (event/event-deleted? prec-event)))
-                                       (inference/belief-deduction prec-event imp))
-                        ;; Compute substitutions from concept term
-                        sub-prec-eternal (when (:success subs-eternal)
-                                           (variable/unify (:term concept) (:term prec-eternal)))
-                        sub-prec-event (when (:success subs-event)
-                                         (variable/unify (:term concept) (:term prec-event)))
-                        ;; Update eternal belief
-                        state (if (and result-eternal
-                                       (not (zero? (term/term-root (:term result-eternal)))))
-                                (update-eternal-from-declarative
-                                  state result-eternal sub-prec-eternal subs-eternal
-                                  current-time config)
-                                state)
-                        ;; Update belief spike for ==> implications
-                        state (if (and result-event
-                                       (not (zero? (term/term-root (:term result-event)))))
-                                (update-spike-from-declarative
-                                  state result-event sub-prec-event subs-event
-                                  current-time config)
-                                state)]
-                    state)))))))
+          (if (variable/has-variable? (:term concept))
+            state
+            (let [prec-eternal (:belief concept)
+                  prec-event (:belief-spike concept)
+                  ;; BELIEF_LAST_USED_TOLERANCE check (ONA Decision.c:620)
+                  skip? (and (< (:creation-time prec-eternal 0) (- current-time belief-last-used-tolerance))
+                             (< (:creation-time prec-event 0) (- current-time belief-last-used-tolerance)))]
+              (if skip?
+                state
+                (let [attempts (+ (if (event/event-deleted? prec-eternal) 0 1)
+                                  (if (event/event-deleted? prec-event) 0 1))
+                      state (perf-add state :decl-unification-attempts attempts)
+                      subs-eternal (when-not (event/event-deleted? prec-eternal)
+                                     (variable/unify imp-precon (:term prec-eternal)))
+                      subs-event (when-not (event/event-deleted? prec-event)
+                                   (variable/unify imp-precon (:term prec-event)))
+                      successes (+ (if (:success subs-eternal) 1 0)
+                                   (if (:success subs-event) 1 0))
+                      state (perf-add state :decl-unification-successes successes)]
+                  (if-not (or (:success subs-eternal) (:success subs-event))
+                    state
+                    (let [;; Derive conclusions
+                          result-eternal (when (and (:success subs-eternal)
+                                                     (not (event/event-deleted? prec-eternal)))
+                                           (inference/belief-deduction prec-eternal imp))
+                          result-event (when (and (:success subs-event)
+                                                   (not (event/event-deleted? prec-event)))
+                                         (inference/belief-deduction prec-event imp))
+                          ;; Compute substitutions from concept term
+                          sub-prec-eternal (when (:success subs-eternal)
+                                             (variable/unify (:term concept) (:term prec-eternal)))
+                          sub-prec-event (when (:success subs-event)
+                                           (variable/unify (:term concept) (:term prec-event)))
+                          ;; Update eternal belief
+                          state (if (and result-eternal
+                                         (not (zero? (term/term-root (:term result-eternal)))))
+                                  (update-eternal-from-declarative
+                                    state result-eternal sub-prec-eternal subs-eternal
+                                    current-time config)
+                                  state)
+                          ;; Update belief spike for ==> implications
+                          state (if (and result-event
+                                         (not (zero? (term/term-root (:term result-event)))))
+                                  (update-spike-from-declarative
+                                    state result-event sub-prec-event subs-event
+                                    current-time config)
+                                  state)]
+                      state))))))))
       state
-      (:concepts state))))
+      candidates)))
 
 (defn- declarative-anticipate
   "Process declarative implications each cycle.
@@ -1130,28 +1192,47 @@
                   (if-not remaining
                     state
                     (let [imp (first remaining)
-                          is-decl? (== (term/term-root (:term imp)) term/implication)]
-                      (if (and is-decl? (> decl-count top-k-declarative-implications))
-                        (recur (next remaining) state decl-count)
+                          is-decl? (== (term/term-root (:term imp)) term/implication)
+                          state (-> state
+                                    (perf-inc :decl-implications-scanned)
+                                    (cond-> is-decl? (perf-inc :decl-implications-declarative)))]
+                      (if (and is-decl? (>= decl-count top-k-declarative-implications))
                         (recur (next remaining)
-                               (process-declarative-implication state imp current-time config)
+                               (perf-inc state :decl-implications-skipped-topk)
+                               decl-count)
+                        (recur (next remaining)
+                               (-> state
+                                   (perf-inc :decl-implications-processed)
+                                   (process-declarative-implication imp current-time config))
                                (if is-decl? (inc decl-count) decl-count)))))))))
           state
           (:concepts state))))))
 
 ;; -- Main Cycle --
 
+(defn perf-summary
+  "Return a lightweight summary of cycle instrumentation data."
+  [state]
+  (let [phase-ns (get-in state [:perf :phase-times-ns] {})
+        phase-seconds (into {}
+                        (map (fn [[k v]] [k (/ (double v) 1000000000.0)]))
+                        phase-ns)]
+    {:enabled? (perf-enabled? state)
+     :phase-seconds phase-seconds
+     :phase-counts (get-in state [:perf :phase-counts] {})
+     :counters (get-in state [:perf :counters] {})}))
+
 (defn cycle-perform
   "Perform one inference cycle. Pure function: state -> state.
    Time increments AFTER processing, matching ONA's flow:
    event at currentTime -> Cycle_Perform(currentTime) -> currentTime++"
   [state]
-  (-> state
-      process-pending-events
-      select-belief-events
-      process-belief-events
-      declarative-anticipate
-      process-goal-events
-      apply-forgetting
-      (dissoc :selected-beliefs)
-      (update :current-time inc)))
+  (let [state (timed-phase state :process-pending-events process-pending-events)
+        state (timed-phase state :select-belief-events select-belief-events)
+        state (timed-phase state :process-belief-events process-belief-events)
+        state (timed-phase state :declarative-anticipate declarative-anticipate)
+        state (timed-phase state :process-goal-events process-goal-events)
+        state (timed-phase state :apply-forgetting apply-forgetting)]
+    (-> state
+        (dissoc :selected-beliefs)
+        (update :current-time inc))))
