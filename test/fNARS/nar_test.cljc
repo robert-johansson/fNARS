@@ -20,6 +20,7 @@
             [fNARS.nar :as nar]
             [fNARS.parser :as parser]
             [fNARS.shell :as shell]
+            [fNARS.nal-runner :as nal-runner]
             [fNARS.nar-config :as nar-config]
             [clojure.string :as str]))
 
@@ -311,6 +312,23 @@
   (let [result (parser/parse-narsese "(&/ <green --> seen> ^pick). :|:")]
     (is (some? result))
     (is (= (:tense result) :present))))
+
+(deftest test-nal-runner-expected-parsing
+  (testing "no execution expectation"
+    (let [parsed (#'nal-runner/extract-expected "//--expected: no execution")]
+      (is (= :no-execution (:type parsed)))))
+  (testing "answer expectation with occurrenceTime"
+    (let [parsed (#'nal-runner/extract-expected
+                   "//expected: Answer: <{inst1} --> duck>. :|: occurrenceTime=3 Truth: frequency=1.000000, confidence=0.421631")]
+      (is (= :answer (:type parsed)))
+      (is (= "<{inst1} --> duck>" (:term-str parsed)))
+      (is (= 3 (:occurrence-time parsed)))))
+  (testing "statement expectation without Answer prefix"
+    (let [parsed (#'nal-runner/extract-expected
+                   "//expected: <(tick &/ <({SELF} * $1) --> ^remember>) =/> <$1 --> [localized]>>. Truth: frequency=1.000000, confidence=0.900000")]
+      (is (= :answer (:type parsed)))
+      (is (= "<(tick &/ <({SELF} * $1) --> ^remember>) =/> <$1 --> [localized]>>"
+            (:term-str parsed))))))
 
 ;; === NAR Integration Tests ===
 

@@ -57,6 +57,10 @@ Update:
   - only allowed right after init/reset
   - slot bounds checking by `operations-max`
   - duplicate target op clears that slot and following slots
+- Expanded `.nal` expectation handling in runner:
+  - `//--expected: no execution`
+  - `Answer: ... :|: occurrenceTime=... Truth: ...`
+  - `<term>. Truth: ...` lines without `Answer:`
 
 ## Strategy
 

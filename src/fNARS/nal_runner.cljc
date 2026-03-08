@@ -36,18 +36,35 @@
     (when text
       (let [text (str/trim text)]
         (cond
-          ;; Answer: <term>. Truth: frequency=F, confidence=C
+          ;; no execution
+          (re-find #"(?i)\bno execution\b" text)
+          {:type :no-execution}
+
+          ;; Answer: <term>. :|: occurrenceTime=N Truth: frequency=F, confidence=C
           (str/starts-with? text "Answer:")
-          (let [answer-text (str/trim (subs text 7))
-                ;; Split on ". Truth:" or " Truth:"
-                [term-part truth-part] (str/split answer-text #"\.\s*Truth:\s*" 2)]
-            (when truth-part
-              (let [freq-match (re-find #"frequency=([0-9.]+)" truth-part)
-                    conf-match (re-find #"confidence=([0-9.]+)" truth-part)]
-                {:type :answer
-                 :term-str (str/trim term-part)
-                 :truth {:frequency (p/parse-float (second freq-match))
-                         :confidence (p/parse-float (second conf-match))}})))
+          (when-let [[_ term-str occurrence-time-str truth-part]
+                     (re-find #"(?is)^Answer:\s*(.+?)\.\s*(?::\|:\s*occurrenceTime=([-]?\d+)\s*)?(?:creationTime=[-]?\d+\s*)?Truth:\s*(.+)$"
+                       text)]
+            (let [freq-match (re-find #"frequency=([0-9.]+)" truth-part)
+                  conf-match (re-find #"confidence=([0-9.]+)" truth-part)]
+              {:type :answer
+               :term-str (str/trim term-str)
+               :occurrence-time (when occurrence-time-str (p/parse-int occurrence-time-str))
+               :truth {:frequency (p/parse-float (second freq-match))
+                       :confidence (p/parse-float (second conf-match))}}))
+
+          ;; <term>. Truth: frequency=F, confidence=C (used in some files without "Answer:")
+          (and (str/includes? text "Truth:")
+               (re-find #"^<.+>\." text))
+          (when-let [[_ term-str _occurrence-time-str truth-part]
+                     (re-find #"(?is)^(.+?)\.\s*(?::\|:\s*occurrenceTime=([-]?\d+)\s*)?(?:creationTime=[-]?\d+\s*)?Truth:\s*(.+)$"
+                       text)]
+            (let [freq-match (re-find #"frequency=([0-9.]+)" truth-part)
+                  conf-match (re-find #"confidence=([0-9.]+)" truth-part)]
+              {:type :answer
+               :term-str (str/trim term-str)
+               :truth {:frequency (p/parse-float (second freq-match))
+                       :confidence (p/parse-float (second conf-match))}}))
 
           ;; ^op executed with args
           (str/includes? text "executed with args")
@@ -68,22 +85,32 @@
   (let [parsed (parser/parse-narsese (str (:term-str expected) "?"))
         _ (when-not parsed
             (println "  WARNING: Cannot parse expected term:" (:term-str expected)))
+        query-tense (if (some? (:occurrence-time expected)) :present :eternal)
         {:keys [answer]} (when parsed
-                           (nar/nar-answer-question state (:term parsed) :eternal))]
+                           (nar/nar-answer-question state (:term parsed) query-tense))]
     (if-not answer
       {:pass false :reason "No answer found"}
       (let [ef (:frequency (:truth expected))
             ec (:confidence (:truth expected))
             af (:frequency (:truth answer))
-            ac (:confidence (:truth answer))]
+            ac (:confidence (:truth answer))
+            expected-occurrence (:occurrence-time expected)
+            actual-occurrence (:occurrence-time answer)
+            occurrence-match? (or (nil? expected-occurrence)
+                                  (= expected-occurrence actual-occurrence))]
         ;; ONA evaluation checks confidence >= expected (not exact match)
         ;; and frequency approximately equal
         (if (and (approx= af ef tolerance)
-                 (>= ac (- ec tolerance)))
+                 (>= ac (- ec tolerance))
+                 occurrence-match?)
           {:pass true}
           {:pass false
            :reason (str "Expected f=" ef " c>=" ec
-                        ", got f=" af " c=" ac)})))))
+                        (when expected-occurrence
+                          (str " occurrenceTime=" expected-occurrence))
+                        ", got f=" af " c=" ac
+                        (when (some? actual-occurrence)
+                          (str " occurrenceTime=" actual-occurrence)))})))))
 
 (defn- check-execution [output expected]
   "Check if the expected operation was executed in the output."
@@ -95,6 +122,12 @@
       {:pass true}
       {:pass false
        :reason (str "Expected " op-name " execution not found")})))
+
+(defn- check-no-execution [output]
+  "Check that no execution happened in the buffered output."
+  (if (some #(= (:type %) :execution) output)
+    {:pass false :reason "Found execution but expected none"}
+    {:pass true}))
 
 ;; -- Main runner --
 
@@ -145,6 +178,9 @@
                                :execution
                                (let [r (check-execution pending-output expected)]
                                  (assoc r :desc (str "Execution: " (:operation expected))))
+                               :no-execution
+                               (let [r (check-no-execution pending-output)]
+                                 (assoc r :desc "No execution"))
                                nil)]
                   (recur state rest-lines (if result (conj results result) results) []))
                 (recur state rest-lines results pending-output)))
