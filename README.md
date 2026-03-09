@@ -2,7 +2,7 @@
 
 Functional Non-Axiomatic Reasoning System
 
-![fNARS](https://github.com/user-attachments/assets/c2f94e26-d034-475a-9376-5fc1b8cbf818)
+<img src="assets/logo-small.png" alt="fNARS" width="200">
 
 A pure functional Clojure port of [OpenNARS for Applications](https://github.com/opennars/OpenNARS-for-Applications) (ONA). The entire reasoner state is a single immutable map — no globals, no mutation. Supports sensorimotor reasoning (NAL 6-8) and declarative inference (NAL 1-6).
 
