@@ -5,21 +5,24 @@
             [babashka.process :as proc]
             [clojure.string :as str]))
 
-(def examples-dir "OpenNARS-for-Applications/examples/nal")
+(def default-examples-dir "OpenNARS-for-Applications/examples/nal")
 (def ona-bin "OpenNARS-for-Applications/NAR")
 (def fnars-cmd
   ["bunx" "--bun" "nbb" "-cp" "src:lib/instaparse/src" "-m" "fNARS.nal-runner"])
 
 (defn usage []
-  (println "Usage: bb nal:compat [--limit N] [--file NAME_OR_PATH (repeatable)] [--include-space] [--timeout-sec N] [--verbose]"))
+  (println "Usage: bb nal:compat [--dir PATH] [--limit N] [--file NAME_OR_PATH (repeatable)] [--include-space] [--timeout-sec N] [--verbose]"))
 
 (defn parse-args [args]
-  (loop [args args opts {:limit nil :files [] :include-space? false :verbose? false :timeout-sec 90}]
+  (loop [args args opts {:dir default-examples-dir :limit nil :files [] :include-space? false :verbose? false :timeout-sec 90}]
     (if (empty? args)
       opts
       (let [a (first args)
             more (rest args)]
         (case a
+          "--dir" (if-let [d (first more)]
+                    (recur (rest more) (assoc opts :dir d))
+                    (do (println "Missing value for --dir") (System/exit 1)))
           "--limit" (if-let [n (first more)]
                       (recur (rest more) (assoc opts :limit (parse-long n)))
                       (do (println "Missing value for --limit") (System/exit 1)))
@@ -45,8 +48,8 @@
       (and (not include-space?)
            (str/includes? content "*space"))))
 
-(defn list-nal-files [{:keys [files limit include-space?]}]
-  (let [all-files (->> (fs/glob examples-dir "*.nal")
+(defn list-nal-files [{:keys [dir files limit include-space?]}]
+  (let [all-files (->> (fs/glob dir "*.nal")
                        (map str)
                        sort)
         filtered
@@ -233,6 +236,7 @@
     (when (empty? files)
       (println "No matching .nal files.")
       (System/exit 1))
+    (println "NAL directory:" (:dir opts))
     (println "Running compatibility checks on" (count files) "files")
     (println "Excluded commands: *setvalue" (if (:include-space? opts) "" "and *space"))
     (println "Timeout per engine run:" (:timeout-sec opts) "seconds")

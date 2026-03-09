@@ -1,0 +1,225 @@
+{:version 2
+ :source-dir "OpenNARS-for-Applications/examples/nal"
+ :target-dir "examples/nal/files"
+ :files
+ [{:file "avoid3.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS"}
+  {:file "example4.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS"}
+  {:file "self3.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS"}
+  {:file "threelegdog.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS"}
+  {:file "toothbrush.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (execution-focused checks)"}
+  {:file "penguin.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS"}
+  {:file "asthma2.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "avoid.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "avoid2.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "clapwave1.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "door3.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "example2.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "example3.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "marshmallow.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "pickbrighter.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "plandeep.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "self.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "similarities.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (easy/medium sweep)"}
+  {:file "circus.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (hard sweep, 2026-03-09)"}
+  {:file "door2.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (hard sweep, 2026-03-09)"}
+  {:file "preferspecific.nal"
+   :category :works-splendidly
+   :status :pass
+   :note "Verified PASS in ONA and fNARS (hard sweep, 2026-03-09)"}
+
+  {:file "diagnostic.nal"
+   :category :needs-more-work
+   :status :semantic-fail}
+  {:file "greenplant.nal"
+   :category :needs-more-work
+   :status :semantic-fail}
+  {:file "latch.nal"
+   :category :needs-more-work
+   :status :timeout-default-nal-level-6}
+  {:file "propertymatching.nal"
+   :category :needs-more-work
+   :status :semantic-fail}
+  {:file "self2.nal"
+   :category :needs-more-work
+   :status :semantic-fail}
+  {:file "spatial3.nal"
+   :category :needs-more-work
+   :status :semantic-fail}
+  {:file "example1.nal"
+   :category :needs-more-work
+   :status :timeout}
+  {:file "reasoningbench.nal"
+   :category :needs-more-work
+   :status :high-complexity}
+  {:file "activequestion.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^say) in easy/medium sweep"}
+  {:file "asthma.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in easy/medium sweep"}
+  {:file "door.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in easy/medium sweep"}
+  {:file "duck.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in easy/medium sweep"}
+  {:file "functionalequivalence1.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation in easy/medium sweep"}
+  {:file "functionalequivalence2.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation in easy/medium sweep"}
+  {:file "functionalequivalence3.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation in easy/medium sweep"}
+  {:file "relationalnetwork.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectations in easy/medium sweep"}
+  {:file "smokes.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectations in easy/medium sweep"}
+  {:file "symmetry.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in easy/medium sweep"}
+  {:file "whatwarmer.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in easy/medium sweep"}
+  {:file "school.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in hard sweep (2026-03-09)"}
+  {:file "map.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution and answer expectations in hard sweep (2026-03-09)"}
+  {:file "map2.nal"
+   :category :needs-more-work
+   :status :baseline-fail
+   :note "Both ONA and fNARS failed expectations in hard sweep (2026-03-09)"}
+  {:file "numbers.nal"
+   :category :needs-more-work
+   :status :mixed-fail
+   :note "Failed answer and execution expectations in hard sweep (2026-03-09)"}
+  {:file "prefergeneral.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in hard sweep (2026-03-09)"}
+  {:file "prefernext.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectations in hard sweep (2026-03-09)"}
+  {:file "value.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^right) in blocked sweep (2026-03-09)"}
+  {:file "categoryformationanddetection.nal"
+   :category :needs-more-work
+   :status :timeout
+   :note "fNARS timed out at 60s while ONA passed in hard sweep (2026-03-09)"}
+  {:file "clapwave0.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectations (^clap, ^wave) in hard sweep (2026-03-09)"}
+  {:file "clapwave2.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^wave) in hard sweep (2026-03-09)"}
+  {:file "clapwave3.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^clap) in hard sweep (2026-03-09)"}
+  {:file "clapwave4.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^wave) in hard sweep (2026-03-09)"}
+  {:file "clapwave5.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^wave) in hard sweep (2026-03-09)"}
+  {:file "learnwords.nal"
+   :category :needs-more-work
+   :status :timeout
+   :note "fNARS timed out at 60s while ONA passed in hard sweep (2026-03-09)"}
+  {:file "spatial.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in blocked sweep (2026-03-09)"}
+  {:file "spatial4.nal"
+   :category :needs-more-work
+   :status :semantic-fail
+   :note "Failed answer expectation in blocked sweep (2026-03-09)"}
+  {:file "vector.nal"
+   :category :needs-more-work
+   :status :execution-fail
+   :note "Failed execution expectation (^left) in blocked sweep (2026-03-09)"}]}

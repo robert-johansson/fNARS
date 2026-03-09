@@ -48,6 +48,15 @@
   nal:compat {:doc  "Run ONA vs fNARS compatibility checks over .nal examples"
               :task (load-file "scripts/nal_compat.clj")}
 
+  nal:compat-local {:doc  "Run ONA vs fNARS compatibility checks over local curated corpus (default category: works-splendidly)"
+                    :task (load-file "scripts/nal_compat_local.clj")}
+
+  nal:sync {:doc "Sync curated local examples/nal/files corpus from ONA source using MANIFEST.edn categories"
+            :task (load-file "scripts/nal_sync.clj")}
+
+  nal:catalog {:doc  "Classify .nal examples by complexity/risk profile"
+               :task (load-file "scripts/nal_catalog.clj")}
+
   nal:perf {:doc "Run bounded compatibility/performance samples (90s timeout)"
             :task (do
                     (shell "bb scripts/nal_compat.clj --file avoid3.nal --verbose --timeout-sec 90")
