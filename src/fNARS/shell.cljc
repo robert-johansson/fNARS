@@ -229,8 +229,8 @@
          :entries []
          :messages [(str "Babbling ops set to " val)]})
 
-      (str/starts-with? line "*setsemanticinferencenallevel=")
-      (let [val (p/parse-int (subs line 30))
+      (str/starts-with? line "*nallevel=")
+      (let [val (p/parse-int (subs line 10))
             rules (rule-table/rules-for-level val)
             index (rule-table/build-rule-index rules)]
         {:state (-> state
